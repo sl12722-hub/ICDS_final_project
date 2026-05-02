@@ -121,6 +121,10 @@ The GUI client includes:
 - a text input box
 - a Send button
 - a connection status label
+- an optional online user list
+
+If the username field is left empty, the GUI will automatically use a
+default name such as `Guest_1234`.
 
 ## Import Safety
 

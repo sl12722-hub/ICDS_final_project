@@ -18,6 +18,7 @@ class ClientConnection:
     file_obj: socket.SocketIO
     address: tuple[str, int]
     name: str
+    has_announced_join: bool
 
 
 class ChatServer:
@@ -58,16 +59,10 @@ class ChatServer:
 
         client_file = client_socket.makefile("r", encoding="utf-8")
         default_name = f"{address[0]}:{address[1]}"
-        client = ClientConnection(client_socket, client_file, address, default_name)
+        client = ClientConnection(client_socket, client_file, address, default_name, False)
 
         with self.lock:
             self.clients[client_socket] = client
-
-        self.send_system_message(
-            f"{default_name} connected.",
-            target_socket=client_socket,
-            target_name=default_name,
-        )
 
         try:
             for raw_line in client_file:
@@ -77,7 +72,6 @@ class ChatServer:
                     self.send_error(str(error), client_socket)
                     continue
 
-                self._update_client_name(client_socket, message["sender"])
                 self.route_message(client_socket, message)
         except (ConnectionResetError, OSError):
             pass
@@ -88,6 +82,7 @@ class ChatServer:
         """Handle known message types and safely reject unknown ones."""
 
         msg_type = message["type"]
+        extra = message["extra"]
 
         if msg_type not in MESSAGE_TYPES:
             self.send_error(f"Unknown message type: {msg_type}", source_socket)
@@ -100,11 +95,20 @@ class ChatServer:
         if msg_type == "error":
             return
 
+        sender_name = self._normalize_name(message["sender"], source_socket)
+        self._update_client_name(source_socket, sender_name)
+        if extra.get("event") == "login":
+            self._announce_join_if_needed(source_socket)
+            return
+
+        self._announce_join_if_needed(source_socket)
         target = message["target"]
         if target == "all":
+            message["sender"] = sender_name
             self.broadcast(message)
             return
 
+        message["sender"] = sender_name
         delivered = self.send_to_target(target, message)
         if not delivered:
             self.send_error(f"Target user '{target}' is not connected.", source_socket)
@@ -138,10 +142,11 @@ class ChatServer:
         content: str,
         target_socket: socket.socket | None = None,
         target_name: str = "all",
+        extra: dict[str, object] | None = None,
     ) -> None:
         """Create and send a system message using the shared protocol."""
 
-        message = create_message("system", "Server", content, target=target_name)
+        message = create_message("system", "System", content, target=target_name, extra=extra)
         if target_socket is not None:
             self._safe_send_bytes(target_socket, encode_message(message))
             return
@@ -181,7 +186,11 @@ class ChatServer:
         except OSError:
             pass
 
-        self.send_system_message(f"{client.name} disconnected.")
+        if client.has_announced_join:
+            self.send_system_message(
+                f"{client.name} left the chat",
+                extra={"user_list": self.get_online_users()},
+            )
 
     def shutdown(self) -> None:
         """Close all sockets when the server stops."""
@@ -215,6 +224,36 @@ class ChatServer:
                 self.name_to_socket[new_name] = client_socket
             elif new_name not in self.name_to_socket:
                 self.name_to_socket[new_name] = client_socket
+
+    def _announce_join_if_needed(self, client_socket: socket.socket) -> None:
+        """Broadcast a join message only once for each connected client."""
+
+        with self.lock:
+            client = self.clients.get(client_socket)
+            if client is None or client.has_announced_join:
+                return
+            client.has_announced_join = True
+            client_name = client.name
+
+        self.send_system_message(
+            f"{client_name} joined the chat",
+            extra={"user_list": self.get_online_users()},
+        )
+
+    def _normalize_name(self, requested_name: str, client_socket: socket.socket) -> str:
+        """Use a readable fallback name when the sender field is empty."""
+
+        cleaned_name = requested_name.strip()
+        if cleaned_name:
+            return cleaned_name
+
+        return f"Guest_{id(client_socket) % 10000:04d}"
+
+    def get_online_users(self) -> list[str]:
+        """Return the current connected usernames for the GUI user list."""
+
+        with self.lock:
+            return sorted(client.name for client in self.clients.values() if client.has_announced_join)
 
     def _safe_send_bytes(self, target_socket: socket.socket, payload: bytes) -> None:
         """Send bytes without letting send failures crash the server."""

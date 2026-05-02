@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import random
 import socket
 import threading
 import tkinter as tk
@@ -22,7 +23,7 @@ class GUIChatClient:
         self.client_socket: socket.socket | None = None
         self.receiver_thread: threading.Thread | None = None
         self.window_closed = False
-        self.ui_queue: queue.Queue[tuple[int, str, str | None]] = queue.Queue()
+        self.ui_queue: queue.Queue[tuple[int, str, object | None]] = queue.Queue()
         self.queue_job_id: str | None = None
         self.connection_id = 0
         self.disconnect_requested = False
@@ -67,8 +68,17 @@ class GUIChatClient:
         )
         self.status_label.pack(fill="x")
 
-        self.chat_area = scrolledtext.ScrolledText(self.root, state="disabled", wrap="word")
-        self.chat_area.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        center_frame = tk.Frame(self.root, padx=10, pady=10)
+        center_frame.pack(fill="both", expand=True, pady=(0, 10))
+
+        self.chat_area = scrolledtext.ScrolledText(center_frame, state="disabled", wrap="word")
+        self.chat_area.pack(side="left", fill="both", expand=True)
+
+        user_list_frame = tk.Frame(center_frame, padx=10)
+        user_list_frame.pack(side="left", fill="y")
+        tk.Label(user_list_frame, text="Online Users").pack(anchor="w")
+        self.user_listbox = tk.Listbox(user_list_frame, width=18, height=18)
+        self.user_listbox.pack(fill="y", expand=True)
 
         bottom_frame = tk.Frame(self.root, padx=10, pady=10)
         bottom_frame.pack(fill="x")
@@ -86,10 +96,7 @@ class GUIChatClient:
         if self.client_socket is not None:
             return
 
-        username = self.username_var.get().strip()
-        if not username:
-            messagebox.showerror("Missing username", "Please enter a username.")
-            return
+        username = self.resolve_username()
 
         try:
             host = self.host_var.get().strip()
@@ -119,6 +126,13 @@ class GUIChatClient:
         self.message_entry.focus_set()
         self.status_var.set(f"Status: Connected as {username}")
         self.add_text("Connected to server.\n")
+        try:
+            self.send_login_message(username)
+        except OSError as error:
+            self.status_var.set("Status: Disconnected")
+            messagebox.showerror("Login failed", str(error))
+            self.handle_disconnect()
+            return
 
         self.receiver_thread = threading.Thread(
             target=self.receive_messages,
@@ -136,13 +150,13 @@ class GUIChatClient:
             for raw_line in client_file:
                 try:
                     message = decode_message(raw_line)
-                    display_text = self.format_message(message)
                 except ProtocolError as error:
-                    display_text = f"[protocol error] {error}\n"
+                    self.ui_queue.put((connection_id, "text", f"[protocol error] {error}\n"))
+                    continue
 
                 # Each received message becomes one queue item and is discarded
                 # after display, so old text is not re-inserted repeatedly.
-                self.ui_queue.put((connection_id, "text", display_text))
+                self.ui_queue.put((connection_id, "message", message))
         except (ConnectionResetError, OSError):
             if not self.disconnect_requested:
                 self.ui_queue.put((connection_id, "text", "Connection to server was lost.\n"))
@@ -173,16 +187,19 @@ class GUIChatClient:
             messagebox.showerror("Send failed", str(error))
             self.handle_disconnect()
 
-    def format_message(self, message: dict[str, str]) -> str:
+    def format_message(self, message: dict[str, object]) -> str:
         """Format protocol messages for the chat window."""
 
         if message["type"] == "chat":
-            return f"[{message['timestamp']}] {message['sender']}: {message['content']}\n"
+            return f"{message['sender']}: {message['content']}\n"
 
-        return (
-            f"[{message['timestamp']}] "
-            f"{message['type'].upper()} from {message['sender']}: {message['content']}\n"
-        )
+        if message["type"] == "system":
+            return f"System: {message['content']}\n"
+
+        if message["type"] == "error":
+            return f"Error: {message['content']}\n"
+
+        return f"{message['sender']}: {message['content']}\n"
 
     def add_text(self, text: str) -> None:
         """Append text to the chat area."""
@@ -215,6 +232,7 @@ class GUIChatClient:
         self.username_entry.config(state="normal")
         self.message_entry.config(state="disabled")
         self.status_var.set("Status: Disconnected")
+        self.update_user_list([])
 
     def process_ui_queue(self) -> None:
         """Apply background-thread updates from the main Tkinter thread."""
@@ -227,8 +245,10 @@ class GUIChatClient:
                 connection_id, action, payload = self.ui_queue.get_nowait()
                 if connection_id != self.connection_id:
                     continue
-                if action == "text" and payload is not None:
+                if action == "text" and isinstance(payload, str):
                     self.add_text(payload)
+                elif action == "message" and isinstance(payload, dict):
+                    self.handle_server_message(payload)
                 elif action == "disconnect":
                     self.handle_disconnect()
         except queue.Empty:
@@ -247,6 +267,49 @@ class GUIChatClient:
                 self.ui_queue.get_nowait()
         except queue.Empty:
             pass
+
+    def resolve_username(self) -> str:
+        """Use a guest name when the user leaves the username field blank."""
+
+        username = self.username_var.get().strip()
+        if username:
+            return username
+
+        guest_name = f"Guest_{random.randint(1000, 9999)}"
+        self.username_var.set(guest_name)
+        return guest_name
+
+    def send_login_message(self, username: str) -> None:
+        """Tell the server which display name this client will use."""
+
+        if self.client_socket is None:
+            return
+
+        login_message = create_message(
+            "chat",
+            username,
+            "",
+            extra={"event": "login"},
+        )
+        self.client_socket.sendall(encode_message(login_message))
+
+    def handle_server_message(self, message: dict[str, object]) -> None:
+        """Display one server message and refresh the optional user list."""
+
+        extra = message.get("extra", {})
+        if isinstance(extra, dict):
+            user_list = extra.get("user_list")
+            if isinstance(user_list, list):
+                self.update_user_list(user_list)
+
+        self.add_text(self.format_message(message))
+
+    def update_user_list(self, user_list: list[str]) -> None:
+        """Refresh the online user list panel."""
+
+        self.user_listbox.delete(0, "end")
+        for username in user_list:
+            self.user_listbox.insert("end", username)
 
     def close_window(self) -> None:
         """Close the socket first so the app exits cleanly."""
