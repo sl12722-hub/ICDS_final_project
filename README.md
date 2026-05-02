@@ -123,6 +123,7 @@ The GUI client includes:
 - a connection status label
 - an optional online user list
 - a basic `/bot:` command for chatbot replies
+- a bot personality dropdown with memory of recent bot exchanges
 
 If the username field is left empty, the GUI will automatically use a
 default name such as `Guest_1234`.
@@ -131,6 +132,22 @@ Example chatbot command:
 
 ```text
 /bot: explain recursion in simple words
+```
+
+You can change chatbot personality with either the GUI dropdown or a command:
+
+```text
+/personality friendly
+/personality funny
+/personality serious
+```
+
+The chatbot keeps a short recent memory for each user, so prompts like these
+can work in sequence:
+
+```text
+/bot: My name is Ryan.
+/bot: What is my name?
 ```
 
 ## Import Safety

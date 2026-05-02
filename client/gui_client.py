@@ -34,6 +34,7 @@ class GUIChatClient:
         self.host_var = tk.StringVar(value="127.0.0.1")
         self.port_var = tk.StringVar(value="12345")
         self.username_var = tk.StringVar()
+        self.personality_var = tk.StringVar(value=self.chatbot_manager.get_personality_label(None))
         self.message_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Status: Disconnected")
 
@@ -61,6 +62,17 @@ class GUIChatClient:
 
         self.connect_button = tk.Button(top_frame, text="Connect", command=self.connect_to_server)
         self.connect_button.grid(row=0, column=6, padx=5)
+
+        tk.Label(top_frame, text="Bot Personality").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.personality_menu = tk.OptionMenu(
+            top_frame,
+            self.personality_var,
+            self.personality_var.get(),
+            *self.chatbot_manager.get_personality_labels(),
+            command=self.on_personality_selected,
+        )
+        self.personality_menu.config(width=18)
+        self.personality_menu.grid(row=1, column=1, columnspan=3, sticky="w", pady=(8, 0))
 
         self.status_label = tk.Label(
             self.root,
@@ -129,6 +141,7 @@ class GUIChatClient:
         self.message_entry.focus_set()
         self.status_var.set(f"Status: Connected as {username}")
         self.add_text("Connected to server.\n")
+        self.sync_personality_selection(username)
         try:
             self.send_login_message(username)
         except OSError as error:
@@ -175,6 +188,12 @@ class GUIChatClient:
 
         content = self.message_var.get().strip()
         if not content:
+            return
+
+        if self.chatbot_manager.is_personality_command(content):
+            self.message_var.set("")
+            self.message_entry.focus_set()
+            self.handle_personality_command(content)
             return
 
         if self.chatbot_manager.is_bot_command(content):
@@ -294,6 +313,23 @@ class GUIChatClient:
         self.username_var.set(guest_name)
         return guest_name
 
+    def get_chatbot_user_key(self) -> str:
+        """Return the current chatbot user key without forcing a guest name."""
+
+        return self.username_var.get().strip() or "local_user"
+
+    def sync_personality_selection(self, user_key: str | None = None) -> None:
+        """Copy the GUI dropdown value into the chatbot manager."""
+
+        personality_key = self.chatbot_manager.personality_key_from_label(self.personality_var.get())
+        self.chatbot_manager.set_personality(user_key or self.get_chatbot_user_key(), personality_key)
+
+    def show_local_system_message(self, text: str) -> None:
+        """Display a system message that only belongs in this GUI."""
+
+        system_message = create_message("system", "System", text)
+        self.add_text(self.format_message(system_message))
+
     def send_login_message(self, username: str) -> None:
         """Tell the server which display name this client will use."""
 
@@ -329,23 +365,40 @@ class GUIChatClient:
     def start_bot_request(self, command_text: str) -> None:
         """Launch chatbot work in a background thread so the GUI stays responsive."""
 
+        user_key = self.get_chatbot_user_key()
+        self.sync_personality_selection(user_key)
         self.add_text(f"{self.username_var.get().strip()}: {command_text}\n")
         self.bot_thread = threading.Thread(
             target=self.fetch_bot_response,
-            args=(command_text,),
+            args=(user_key, command_text),
             daemon=True,
         )
         self.bot_thread.start()
 
-    def fetch_bot_response(self, command_text: str) -> None:
+    def fetch_bot_response(self, user_key: str, command_text: str) -> None:
         """Call the chatbot manager and queue the result for the GUI thread."""
 
         try:
-            response_text = self.chatbot_manager.chat(command_text)
+            response_text = self.chatbot_manager.chat(user_key, command_text)
         except Exception as error:
             response_text = f"Sorry, the bot had a problem: {error}"
 
         self.ui_queue.put((self.connection_id, "bot_response", response_text))
+
+    def handle_personality_command(self, command_text: str) -> None:
+        """Apply a personality command and show the result locally."""
+
+        user_key = self.get_chatbot_user_key()
+        result_text = self.chatbot_manager.handle_personality_command(user_key, command_text)
+        self.personality_var.set(self.chatbot_manager.get_personality_label(user_key))
+        self.show_local_system_message(result_text)
+
+    def on_personality_selected(self, selected_label: str) -> None:
+        """Update the chatbot manager when the dropdown changes."""
+
+        self.personality_var.set(selected_label)
+        self.sync_personality_selection()
+        self.show_local_system_message(f"Bot personality set to {selected_label}.")
 
     def close_window(self) -> None:
         """Close the socket first so the app exits cleanly."""
