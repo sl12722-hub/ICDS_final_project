@@ -122,9 +122,16 @@ The GUI client includes:
 - a Send button
 - a connection status label
 - an optional online user list
+- a basic `/bot:` command for chatbot replies
 
 If the username field is left empty, the GUI will automatically use a
 default name such as `Guest_1234`.
+
+Example chatbot command:
+
+```text
+/bot: explain recursion in simple words
+```
 
 ## Import Safety
 

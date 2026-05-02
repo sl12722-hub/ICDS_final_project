@@ -9,6 +9,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
 
+from chatbot.chatbot_manager import ChatbotManager
 from server.protocol import ProtocolError, create_message, decode_message, encode_message
 
 
@@ -22,11 +23,13 @@ class GUIChatClient:
 
         self.client_socket: socket.socket | None = None
         self.receiver_thread: threading.Thread | None = None
+        self.bot_thread: threading.Thread | None = None
         self.window_closed = False
         self.ui_queue: queue.Queue[tuple[int, str, object | None]] = queue.Queue()
         self.queue_job_id: str | None = None
         self.connection_id = 0
         self.disconnect_requested = False
+        self.chatbot_manager = ChatbotManager()
 
         self.host_var = tk.StringVar(value="127.0.0.1")
         self.port_var = tk.StringVar(value="12345")
@@ -170,11 +173,17 @@ class GUIChatClient:
     def send_message(self) -> None:
         """Send the current entry box text as a chat message."""
 
-        if self.client_socket is None:
-            return
-
         content = self.message_var.get().strip()
         if not content:
+            return
+
+        if self.chatbot_manager.is_bot_command(content):
+            self.message_var.set("")
+            self.message_entry.focus_set()
+            self.start_bot_request(content)
+            return
+
+        if self.client_socket is None:
             return
 
         try:
@@ -192,6 +201,9 @@ class GUIChatClient:
 
         if message["type"] == "chat":
             return f"{message['sender']}: {message['content']}\n"
+
+        if message["type"] == "bot_response":
+            return f"Bot: {message['content']}\n"
 
         if message["type"] == "system":
             return f"System: {message['content']}\n"
@@ -249,6 +261,9 @@ class GUIChatClient:
                     self.add_text(payload)
                 elif action == "message" and isinstance(payload, dict):
                     self.handle_server_message(payload)
+                elif action == "bot_response" and isinstance(payload, str):
+                    bot_message = create_message("bot_response", "Bot", payload)
+                    self.add_text(self.format_message(bot_message))
                 elif action == "disconnect":
                     self.handle_disconnect()
         except queue.Empty:
@@ -310,6 +325,27 @@ class GUIChatClient:
         self.user_listbox.delete(0, "end")
         for username in user_list:
             self.user_listbox.insert("end", username)
+
+    def start_bot_request(self, command_text: str) -> None:
+        """Launch chatbot work in a background thread so the GUI stays responsive."""
+
+        self.add_text(f"{self.username_var.get().strip()}: {command_text}\n")
+        self.bot_thread = threading.Thread(
+            target=self.fetch_bot_response,
+            args=(command_text,),
+            daemon=True,
+        )
+        self.bot_thread.start()
+
+    def fetch_bot_response(self, command_text: str) -> None:
+        """Call the chatbot manager and queue the result for the GUI thread."""
+
+        try:
+            response_text = self.chatbot_manager.chat(command_text)
+        except Exception as error:
+            response_text = f"Sorry, the bot had a problem: {error}"
+
+        self.ui_queue.put((self.connection_id, "bot_response", response_text))
 
     def close_window(self) -> None:
         """Close the socket first so the app exits cleanly."""
