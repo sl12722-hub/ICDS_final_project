@@ -22,8 +22,10 @@ class GUIChatClient:
         self.client_socket: socket.socket | None = None
         self.receiver_thread: threading.Thread | None = None
         self.window_closed = False
-        self.ui_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+        self.ui_queue: queue.Queue[tuple[int, str, str | None]] = queue.Queue()
         self.queue_job_id: str | None = None
+        self.connection_id = 0
+        self.disconnect_requested = False
 
         self.host_var = tk.StringVar(value="127.0.0.1")
         self.port_var = tk.StringVar(value="12345")
@@ -105,6 +107,9 @@ class GUIChatClient:
             messagebox.showerror("Connection failed", str(error))
             return
 
+        self.connection_id += 1
+        self.disconnect_requested = False
+        self.clear_ui_queue()
         self.connect_button.config(state="disabled")
         self.send_button.config(state="normal")
         self.host_entry.config(state="disabled")
@@ -115,16 +120,17 @@ class GUIChatClient:
         self.status_var.set(f"Status: Connected as {username}")
         self.add_text("Connected to server.\n")
 
-        self.receiver_thread = threading.Thread(target=self.receive_messages, daemon=True)
+        self.receiver_thread = threading.Thread(
+            target=self.receive_messages,
+            args=(self.client_socket, self.connection_id),
+            daemon=True,
+        )
         self.receiver_thread.start()
 
-    def receive_messages(self) -> None:
+    def receive_messages(self, client_socket: socket.socket, connection_id: int) -> None:
         """Read messages in a background thread."""
 
-        if self.client_socket is None:
-            return
-
-        client_file = self.client_socket.makefile("r", encoding="utf-8")
+        client_file = client_socket.makefile("r", encoding="utf-8")
 
         try:
             for raw_line in client_file:
@@ -134,15 +140,18 @@ class GUIChatClient:
                 except ProtocolError as error:
                     display_text = f"[protocol error] {error}\n"
 
-                self.ui_queue.put(("text", display_text))
+                # Each received message becomes one queue item and is discarded
+                # after display, so old text is not re-inserted repeatedly.
+                self.ui_queue.put((connection_id, "text", display_text))
         except (ConnectionResetError, OSError):
-            self.ui_queue.put(("text", "Connection to server was lost.\n"))
+            if not self.disconnect_requested:
+                self.ui_queue.put((connection_id, "text", "Connection to server was lost.\n"))
         finally:
             try:
                 client_file.close()
             except OSError:
                 pass
-            self.ui_queue.put(("disconnect", None))
+            self.ui_queue.put((connection_id, "disconnect", None))
 
     def send_message(self) -> None:
         """Send the current entry box text as a chat message."""
@@ -186,6 +195,7 @@ class GUIChatClient:
     def handle_disconnect(self) -> None:
         """Reset the buttons after a disconnect."""
 
+        self.disconnect_requested = True
         if self.client_socket is not None:
             try:
                 self.client_socket.shutdown(socket.SHUT_RDWR)
@@ -214,7 +224,9 @@ class GUIChatClient:
 
         try:
             while True:
-                action, payload = self.ui_queue.get_nowait()
+                connection_id, action, payload = self.ui_queue.get_nowait()
+                if connection_id != self.connection_id:
+                    continue
                 if action == "text" and payload is not None:
                     self.add_text(payload)
                 elif action == "disconnect":
@@ -226,6 +238,15 @@ class GUIChatClient:
             self.queue_job_id = self.root.after(100, self.process_ui_queue)
         except (RuntimeError, tk.TclError):
             self.queue_job_id = None
+
+    def clear_ui_queue(self) -> None:
+        """Drop stale queued UI events before starting a new connection."""
+
+        try:
+            while True:
+                self.ui_queue.get_nowait()
+        except queue.Empty:
+            pass
 
     def close_window(self) -> None:
         """Close the socket first so the app exits cleanly."""
