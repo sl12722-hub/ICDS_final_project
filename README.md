@@ -5,10 +5,43 @@ communication between the server and clients.
 
 ## Project Structure
 
-- `server/protocol.py`: shared message format and helper functions
-- `server/server.py`: threaded chat server
-- `client/client.py`: terminal chat client
-- `client/gui_client.py`: Tkinter GUI chat client
+```text
+project/
+  server/
+    server.py
+    protocol.py
+    chat_history.py
+    game_manager.py
+
+  client/
+    client.py
+    gui_client.py
+
+  chatbot/
+    chatbot_client.py
+    chatbot_manager.py
+
+  game/
+    tic_tac_toe.py
+    game_window.py
+
+  bonus/
+    sentiment.py
+    summary_keywords.py
+    ai_picture.py
+
+  docs/
+    pi_mono_usage.md
+    demo_script.md
+
+  README.md
+```
+
+Current feature status:
+
+- `server/` and `client/` contain working chat code.
+- `chatbot/`, `game/`, and `bonus/` contain safe placeholder modules for future issues.
+- No file uses a standard-library-conflicting name such as `json.py`, `socket.py`, `sys.py`, or `tkinter.py`.
 
 ## Unified Message Format
 
@@ -81,6 +114,12 @@ You can also start the GUI client instead of the terminal client:
 python -m client.gui_client
 ```
 
+## Import Safety
+
+- Each feature folder is a Python package with an `__init__.py` file.
+- Shared socket message helpers stay in `server/protocol.py`.
+- New folders were added without renaming `server/server.py` or `client/client.py`, so existing run commands still work.
+
 ## How To Test Normal Chat With Two Clients
 
 1. Run `python -m server.server`.
@@ -96,3 +135,4 @@ python -m client.gui_client
 - Missing required fields are caught by protocol validation.
 - Unknown message types return an `error` message.
 - The server ignores client-created `error` messages and blocks client-created `system` messages.
+- Placeholder modules were added for future chatbot, game, and bonus features without changing current chat behavior.
