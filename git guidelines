@@ -1,0 +1,142 @@
+用最简单的一套就够了，目标是：你自己看得懂、老师看提交记录也清楚。
+
+**原则**
+
+- 每完成一个独立板块，提交一次。
+- 每次提交只做一类事情，不要把“协议重构 + GUI修改 + 文档更新”混在一起。
+- 每次提交后尽量立刻 `push`，这样才算真正备份。
+- 提交前先确认代码至少能运行，别把明显坏掉的版本提交上去。
+
+**最适合你这个项目的提交粒度**
+
+按 `issue` 或 `功能块` 提交：
+
+- 协议统一：一个 commit
+- 项目目录整理：一个 commit
+- 聊天机器人接入：一个 commit
+- 游戏房间/联机逻辑：一个 commit
+- summary/keywords：一个 commit
+- sentiment analysis：一个 commit
+- GUI 优化：一个 commit
+- README / docs 更新：一个 commit
+
+如果一个 issue 太大，就拆成 2 到 3 个小 commit，但不要碎到改一行就提一次。
+
+**提交信息格式**
+
+统一用这一种：
+
+```bash
+git commit -m "Verb short description"
+```
+
+只用简单英文动词开头，最容易保持一致。
+
+推荐动词：
+- `Add`
+- `Update`
+- `Fix`
+- `Refactor`
+- `Organize`
+- `Document`
+- `Test`
+
+**适合你项目的提交信息模板**
+
+直接照着写：
+
+```bash
+Add unified socket message protocol
+Organize project folders for future modules
+Add chatbot request and response handling
+Add Tic-Tac-Toe game manager
+Add summary and keyword analysis module
+Add sentiment analysis feature
+Update GUI client layout and controls
+Fix server crash on invalid message data
+Refactor imports for package-based structure
+Document project setup and run instructions
+```
+
+**不要这样写**
+
+```bash
+update
+fix bug
+change code
+final project
+aaaa
+test
+```
+
+这些以后几乎看不出你做了什么。
+
+**你这个项目的推荐日常流程**
+
+每做完一个板块：
+
+```bash
+git status
+git diff
+git add .
+git commit -m "Add chatbot request and response handling"
+git push origin main
+```
+
+如果你想更稳一点，用这个：
+
+```bash
+git status
+git diff
+python -m py_compile server/*.py client/*.py chatbot/*.py game/*.py bonus/*.py
+git add .
+git commit -m "Add chatbot request and response handling"
+git push origin main
+```
+
+**什么时候一定要 commit**
+
+- 一个 issue 做完
+- 一个功能已经能跑
+- 重构完成且没把原功能搞坏
+- 准备开始下一个大模块之前
+- 当天结束开发前
+
+**什么时候不要 commit**
+
+- 代码跑不起来
+- 文件只改到一半，逻辑明显断了
+- 混入很多无关改动但你自己还没检查过
+
+**最简单的项目规范**
+
+你们这个课设直接遵守下面 5 条就够了：
+
+1. 每完成一个 issue，`commit + push`
+2. 提交信息用 `Add / Fix / Refactor / Organize / Document + 内容`
+3. 一个 commit 只做一件事
+4. 提交前至少运行一次基本测试
+5. 不要把临时垃圾文件提交上去
+
+**你现在可以直接照抄的命令模板**
+
+```bash
+git status
+git add .
+git commit -m "Add chatbot request and response handling"
+git push origin main
+```
+
+```bash
+git status
+git add .
+git commit -m "Fix server handling for invalid JSON messages"
+git push origin main
+```
+
+```bash
+git status
+git add .
+git commit -m "Document demo steps and project run instructions"
+git push origin main
+```
