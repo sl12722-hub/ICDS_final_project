@@ -114,6 +114,14 @@ You can also start the GUI client instead of the terminal client:
 python -m client.gui_client
 ```
 
+The GUI client includes:
+
+- a username login field
+- a scrollable message display area
+- a text input box
+- a Send button
+- a connection status label
+
 ## Import Safety
 
 - Each feature folder is a Python package with an `__init__.py` file.
@@ -123,11 +131,13 @@ python -m client.gui_client
 ## How To Test Normal Chat With Two Clients
 
 1. Run `python -m server.server`.
-2. Run `python -m client.client --username Ryan`.
-3. Run `python -m client.client --username Alex`.
-4. Type `Hello` in Ryan's client and press Enter.
-5. Check that both clients display the same chat message.
-6. Type `/quit` in one client and confirm the other client sees the disconnect system message.
+2. Open the first GUI client with `python -m client.gui_client`.
+3. Open the second GUI client with `python -m client.gui_client`.
+4. Enter different usernames in both windows and click `Connect`.
+5. Type `Hello` in the first window and press `Enter` or click `Send`.
+6. Check that the first GUI shows the sent message and the second GUI shows the received message.
+7. Send a reply from the second GUI and confirm both windows update without freezing.
+8. Close one GUI window and confirm it disconnects safely while the other GUI stays responsive.
 
 ## Safety Checks
 
