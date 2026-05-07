@@ -6,6 +6,8 @@ import threading
 import uuid
 from dataclasses import dataclass
 
+from game.tic_tac_toe import TicTacToe
+
 
 @dataclass
 class GameRoom:
@@ -18,6 +20,7 @@ class GameRoom:
     x_socket: object
     o_player_name: str | None = None
     o_socket: object | None = None
+    game: TicTacToe | None = None
 
     def is_full(self) -> bool:
         """Return True when both players have joined."""
@@ -76,6 +79,11 @@ class GameManager:
             room.o_player_name = player_name
             room.o_socket = player_socket
             self.player_in_game[player_name] = room_id
+            
+            # Initialize the game when both players have joined
+            if room.game is None:
+                room.game = TicTacToe()
+            
             return True, room_id
 
     def get_room(self, room_id: str) -> GameRoom | None:
@@ -97,3 +105,40 @@ class GameManager:
             room_id = self.player_in_game.pop(player_name, None)
             if room_id and room_id in self.rooms:
                 self.rooms.pop(room_id, None)
+
+    def handle_move(self, room_id: str, player_name: str, row: int, col: int) -> tuple[bool, dict]:
+        """Handle a player's move and return the game state."""
+
+        with self.lock:
+            if room_id not in self.rooms:
+                return False, {"error": "Room not found"}
+
+            room = self.rooms[room_id]
+            if not room.game:
+                return False, {"error": "Game not started"}
+
+            # Determine player symbol
+            if player_name == room.x_player_name:
+                expected_player = "X"
+            elif player_name == room.o_player_name:
+                expected_player = "O"
+            else:
+                return False, {"error": "Player not in this room"}
+
+            # Check if it's this player's turn
+            if room.game.current_player != expected_player:
+                return False, {"error": f"It is {room.game.current_player}'s turn"}
+
+            # Validate and make the move
+            if not room.game.make_move(row, col):
+                return False, {"error": "Invalid move (cell occupied or out of bounds)"}
+
+            # Return the updated game state
+            game_state = {
+                "board": room.game.board[:],  # Copy of board
+                "current_player": room.game.current_player,
+                "winner": room.game.winner,
+                "is_draw": room.game.is_draw,
+                "is_game_over": room.game.is_game_over(),
+            }
+            return True, game_state

@@ -104,7 +104,7 @@ class ChatServer:
         if msg_type == "error":
             return
 
-        if msg_type in {"game_move", "game_state", "game_end"}:
+        if msg_type in {"game_state", "game_end"}:
             return
 
         sender_name = self._normalize_name(message["sender"], source_socket)
@@ -120,6 +120,13 @@ class ChatServer:
         if msg_type == "game_join":
             room_id = str(extra.get("room_id", "")).strip()
             self._handle_game_join(source_socket, sender_name, room_id)
+            return
+
+        if msg_type == "game_move":
+            room_id = str(extra.get("room_id", "")).strip()
+            row = int(extra.get("row", -1))
+            col = int(extra.get("col", -1))
+            self._handle_game_move(source_socket, sender_name, room_id, row, col)
             return
 
         self._announce_join_if_needed(source_socket)
@@ -400,6 +407,43 @@ class ChatServer:
 
         self._safe_send_bytes(room.x_socket, encode_message(game_start_message))
         self._safe_send_bytes(room.o_socket, encode_message(game_start_message))
+
+    def _handle_game_move(
+        self, player_socket: socket.socket, player_name: str, room_id: str, row: int, col: int
+    ) -> None:
+        """Handle a player's move and broadcast the updated game state to both players."""
+
+        success, result = self.game_manager.handle_move(room_id, player_name, row, col)
+        if not success:
+            error_message = create_message("error", "Server", result.get("error", "Move failed"), target=player_name)
+            self._safe_send_bytes(player_socket, encode_message(error_message))
+            return
+
+        # Get the room to send state to both players
+        room = self.game_manager.get_room(room_id)
+        if not room or not room.game:
+            return
+
+        # Build game_state message with full board information
+        game_state_message = create_message(
+            "game_state",
+            "Server",
+            f"Game state updated",
+            extra={
+                "room_id": room_id,
+                "board": result["board"],
+                "current_player": result["current_player"],
+                "winner": result["winner"],
+                "is_draw": result["is_draw"],
+                "is_game_over": result["is_game_over"],
+                "x_player": room.x_player_name,
+                "o_player": room.o_player_name,
+            },
+        )
+
+        # Broadcast to both players
+        self._safe_send_bytes(room.x_socket, encode_message(game_state_message))
+        self._safe_send_bytes(room.o_socket, encode_message(game_state_message))
 
     def _normalize_name(self, requested_name: str, client_socket: socket.socket) -> str:
         """Use a readable fallback name when the sender field is empty."""
