@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from chatbot.chatbot_manager import ChatbotManager
 from server.chat_history import ChatHistory
+from server.game_manager import GameManager
 from server.protocol import MESSAGE_TYPES, ProtocolError, create_message, decode_message, encode_message
 
 
@@ -36,6 +37,7 @@ class ChatServer:
         self.name_to_socket: dict[str, socket.socket] = {}
         self.chatbot_manager = ChatbotManager()
         self.chat_history = ChatHistory()
+        self.game_manager = GameManager()
         self.history_limit = 12
         self.bot_mention_pattern = re.compile(r"(?i)(?<!\w)@bot\b")
         self.lock = threading.Lock()
@@ -102,10 +104,22 @@ class ChatServer:
         if msg_type == "error":
             return
 
+        if msg_type in {"game_move", "game_state", "game_end"}:
+            return
+
         sender_name = self._normalize_name(message["sender"], source_socket)
         self._update_client_name(source_socket, sender_name)
         if extra.get("event") == "login":
             self._announce_join_if_needed(source_socket)
+            return
+
+        if msg_type == "game_create":
+            self._handle_game_create(source_socket, sender_name)
+            return
+
+        if msg_type == "game_join":
+            room_id = str(extra.get("room_id", "")).strip()
+            self._handle_game_join(source_socket, sender_name, room_id)
             return
 
         self._announce_join_if_needed(source_socket)
@@ -188,6 +202,7 @@ class ChatServer:
             client = self.clients.pop(client_socket, None)
             if client is not None:
                 self.name_to_socket.pop(client.name, None)
+                self.game_manager.remove_player(client.name)
 
         if client is None:
             return
@@ -330,6 +345,61 @@ class ChatServer:
         bot_message = create_message("bot_response", "Bot", response_text)
         self.broadcast(bot_message)
         self._record_group_message(bot_message)
+
+    def _handle_game_create(self, creator_socket: socket.socket, creator_name: str) -> None:
+        """Create a new game room and send the room ID to the creator."""
+
+        room_id = self.game_manager.create_room(creator_name, creator_socket)
+        if not room_id:
+            error_message = create_message(
+                "error",
+                "Server",
+                "You are already in a game.",
+                target=creator_name,
+            )
+            self._safe_send_bytes(creator_socket, encode_message(error_message))
+            return
+
+        create_message_obj = create_message(
+            "game_create",
+            "Server",
+            f"Room created: {room_id}",
+            target=creator_name,
+            extra={"room_id": room_id},
+        )
+        self._safe_send_bytes(creator_socket, encode_message(create_message_obj))
+
+    def _handle_game_join(self, joiner_socket: socket.socket, joiner_name: str, room_id: str) -> None:
+        """Join an existing game room and send game_start to both players if room is now full."""
+
+        success, result = self.game_manager.join_room(room_id, joiner_name, joiner_socket)
+        if not success:
+            error_message = create_message(
+                "error",
+                "Server",
+                result,
+                target=joiner_name,
+            )
+            self._safe_send_bytes(joiner_socket, encode_message(error_message))
+            return
+
+        room = self.game_manager.get_room(room_id)
+        if room is None:
+            return
+
+        game_start_message = create_message(
+            "game_start",
+            "Server",
+            f"Game started: {room.x_player_name}(X) vs {room.o_player_name}(O)",
+            extra={
+                "room_id": room_id,
+                "x_player": room.x_player_name,
+                "o_player": room.o_player_name,
+            },
+        )
+
+        self._safe_send_bytes(room.x_socket, encode_message(game_start_message))
+        self._safe_send_bytes(room.o_socket, encode_message(game_start_message))
 
     def _normalize_name(self, requested_name: str, client_socket: socket.socket) -> str:
         """Use a readable fallback name when the sender field is empty."""
