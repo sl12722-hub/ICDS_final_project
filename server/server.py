@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import re
 import socket
 import threading
 from dataclasses import dataclass
 
+from chatbot.chatbot_manager import ChatbotManager
+from server.chat_history import ChatHistory
 from server.protocol import MESSAGE_TYPES, ProtocolError, create_message, decode_message, encode_message
 
 
@@ -31,6 +34,10 @@ class ChatServer:
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.clients: dict[socket.socket, ClientConnection] = {}
         self.name_to_socket: dict[str, socket.socket] = {}
+        self.chatbot_manager = ChatbotManager()
+        self.chat_history = ChatHistory()
+        self.history_limit = 12
+        self.bot_mention_pattern = re.compile(r"(?i)(?<!\w)@bot\b")
         self.lock = threading.Lock()
 
     def start(self) -> None:
@@ -106,6 +113,15 @@ class ChatServer:
         if target == "all":
             message["sender"] = sender_name
             self.broadcast(message)
+            self._record_group_message(message)
+
+            if self._should_trigger_group_bot(message):
+                thread = threading.Thread(
+                    target=self._handle_group_bot_mention,
+                    args=(sender_name, message["content"]),
+                    daemon=True,
+                )
+                thread.start()
             return
 
         message["sender"] = sender_name
@@ -239,6 +255,81 @@ class ChatServer:
             f"{client_name} joined the chat",
             extra={"user_list": self.get_online_users()},
         )
+
+    def _should_trigger_group_bot(self, message: dict[str, str]) -> bool:
+        """Return True when a public chat message mentions the bot."""
+
+        if message.get("type") != "chat":
+            return False
+
+        sender = str(message.get("sender", "")).strip().lower()
+        if not sender or sender == "bot":
+            return False
+
+        content = str(message.get("content", ""))
+        return bool(content.strip() and self.bot_mention_pattern.search(content))
+
+    def _record_group_message(self, message: dict[str, str]) -> None:
+        """Store a public message so bot prompts can use recent context."""
+
+        with self.lock:
+            self.chat_history.add_message(dict(message))
+
+    def _get_recent_group_messages(self) -> list[dict[str, object]]:
+        """Return a small snapshot of recent group messages."""
+
+        with self.lock:
+            messages = self.chat_history.get_messages()
+
+        if len(messages) <= self.history_limit:
+            return messages
+
+        return messages[-self.history_limit :]
+
+    def _format_group_history(self, messages: list[dict[str, object]]) -> str:
+        """Turn recent messages into readable prompt context."""
+
+        lines: list[str] = []
+        for item in messages:
+            msg_type = str(item.get("type", ""))
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+
+            sender = str(item.get("sender", "")).strip() or "Unknown"
+            if msg_type == "chat":
+                lines.append(f"{sender}: {content}")
+            elif msg_type == "bot_response":
+                lines.append(f"Bot: {content}")
+
+        return "\n".join(lines)
+
+    def _build_group_bot_prompt(self, sender_name: str, current_message: str) -> str:
+        """Combine the current mention with recent group history."""
+
+        cleaned_message = self.bot_mention_pattern.sub("", current_message or "", count=1).strip()
+        recent_history = self._format_group_history(self._get_recent_group_messages())
+
+        prompt_lines = [f"@bot {cleaned_message or 'Please respond to the group.'}"]
+        if recent_history:
+            prompt_lines.append("")
+            prompt_lines.append("Recent group chat history:")
+            prompt_lines.append(recent_history)
+
+        return "\n".join(prompt_lines)
+
+    def _handle_group_bot_mention(self, sender_name: str, current_message: str) -> None:
+        """Generate and broadcast one bot response for a group mention."""
+
+        prompt_text = self._build_group_bot_prompt(sender_name, current_message)
+        try:
+            response_text = self.chatbot_manager.chat(sender_name, prompt_text)
+        except Exception as error:
+            response_text = f"Sorry, the bot had a problem: {error}"
+
+        bot_message = create_message("bot_response", "Bot", response_text)
+        self.broadcast(bot_message)
+        self._record_group_message(bot_message)
 
     def _normalize_name(self, requested_name: str, client_socket: socket.socket) -> str:
         """Use a readable fallback name when the sender field is empty."""
