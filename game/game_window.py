@@ -218,6 +218,10 @@ class GameWindow:
             button.config(state="disabled")
 
         if self.is_local:
+            if self.game.winner is not None:
+                self.result_var.set(f"Result: {self.game.winner} wins")
+            elif self.game.is_draw:
+                self.result_var.set("Result: Draw")
             self.status_var.set(self.game.get_status_text())
             return
 
