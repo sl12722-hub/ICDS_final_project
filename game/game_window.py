@@ -20,8 +20,14 @@ class GameWindow:
         room_id: str = "",
         player_symbol: str = "",
         username: str = "",
+        parent: tk.Misc | None = None,
+        auto_listen: bool = True,
     ) -> None:
-        self.root = tk.Tk()
+        self.parent = parent
+        if parent is None:
+            self.root = tk.Tk()
+        else:
+            self.root = tk.Toplevel(parent)
         self.root.title("Tic-Tac-Toe")
         self.root.resizable(False, False)
 
@@ -36,14 +42,17 @@ class GameWindow:
         self.player_symbol = player_symbol
         self.username = username or player_symbol
         self.is_local = socket_obj is None
+        self.auto_listen = auto_listen
         self.last_server_state: dict[str, object] | None = None
         self.last_game_over_text = ""
 
         self._build_ui()
 
         # Start listening for server messages if multiplayer
-        if not self.is_local and self.socket:
+        if not self.is_local and self.socket and self.auto_listen:
             self._start_message_listener()
+
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def _build_ui(self) -> None:
         """Create the labels, board buttons, and restart control."""
@@ -120,18 +129,22 @@ class GameWindow:
             for line in sock_file:
                 try:
                     message = json.loads(line.strip())
-                    msg_type = message.get("type")
-
-                    if msg_type == "game_state":
-                        self._handle_game_state(message)
-                    elif msg_type == "game_start":
-                        self._handle_game_start(message)
-                    elif msg_type == "error":
-                        self._handle_error(message)
+                    self.handle_server_message(message)
                 except json.JSONDecodeError:
                     pass
         except Exception as e:
             print(f"Message listener error: {e}")
+
+    def handle_server_message(self, message: dict) -> None:
+        """Dispatch one game-related message to this game window."""
+
+        msg_type = message.get("type")
+        if msg_type == "game_state":
+            self._handle_game_state(message)
+        elif msg_type == "game_start":
+            self._handle_game_start(message)
+        elif msg_type == "error":
+            self._handle_error(message)
 
     def _handle_game_start(self, message: dict) -> None:
         """Handle game_start message from server."""
@@ -244,7 +257,16 @@ class GameWindow:
     def launch(self) -> None:
         """Start the Tkinter event loop."""
 
-        self.root.mainloop()
+        if self.parent is None:
+            self.root.mainloop()
+
+    def close(self) -> None:
+        """Close this game window only."""
+
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
 
 
 def main() -> None:
