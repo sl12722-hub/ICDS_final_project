@@ -1,371 +1,173 @@
-"""Summary and keyword helpers for recent chat history."""
+"""Offline summary and keyword helpers for recent chat history."""
 
 from __future__ import annotations
 
 from collections import Counter
 import re
-from typing import Iterable
 
+SUMMARY_EMPTY_MESSAGE = "Not enough chat history to summarize yet."
+KEYWORDS_EMPTY_MESSAGE = "No keywords available yet."
+DEFAULT_HISTORY_LIMIT = 30
 
-_SUMMARY_EMPTY = "No recent chat history to summarize."
-_KEYWORDS_EMPTY: list[str] = []
-_MAX_KEYWORDS = 10
-_MIN_KEYWORDS = 5
-
-_STOPWORDS = {
-    "a",
-    "an",
-    "and",
-    "are",
-    "as",
-    "at",
-    "be",
-    "but",
-    "by",
-    "for",
-    "from",
-    "had",
-    "has",
-    "have",
-    "he",
-    "her",
-    "his",
-    "i",
-    "in",
-    "is",
-    "it",
-    "me",
-    "my",
-    "not",
-    "of",
-    "on",
-    "or",
-    "our",
-    "she",
-    "that",
-    "the",
-    "their",
-    "them",
-    "there",
-    "they",
-    "this",
-    "to",
-    "we",
-    "were",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "will",
-    "with",
-    "you",
-    "your",
-    "about",
-    "after",
-    "before",
-    "can",
-    "do",
-    "does",
-    "doing",
-    "done",
-    "from",
-    "got",
-    "going",
-    "like",
-    "look",
-    "need",
-    "okay",
-    "please",
-    "should",
-    "so",
-    "than",
-    "then",
-    "want",
-    "would",
+STOPWORDS = {
+    "a", "about", "after", "all", "also", "am", "an", "and", "any", "are",
+    "as", "at", "be", "because", "been", "before", "being", "but", "by",
+    "can", "could", "did", "do", "does", "doing", "for", "from", "had",
+    "has", "have", "he", "her", "here", "hers", "him", "his", "how", "i",
+    "if", "in", "into", "is", "it", "its", "just", "like", "me", "more",
+    "most", "my", "no", "not", "now", "of", "on", "or", "our", "ours",
+    "please", "she", "so", "some", "than", "that", "the", "their", "them",
+    "then", "there", "these", "they", "this", "those", "to", "too", "up",
+    "us", "was", "we", "were", "what", "when", "where", "which", "who",
+    "why", "will", "with", "would", "you", "your", "yours",
 }
+IGNORED_TOKENS = {"bot", "system", "summary", "keywords"}
 
 
-def summarize_chat(history_text: str) -> str:
-    """Summarize recent chat history in a short paragraph."""
-
-    cleaned_history = history_text.strip()
-    if not cleaned_history:
-        return _SUMMARY_EMPTY
-
-    llm_summary = _llm_summary(cleaned_history)
-    if llm_summary:
-        return llm_summary
-
-    return _fallback_summary(cleaned_history)
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", text.lower())
 
 
-def extract_keywords(history_text: str) -> list[str]:
-    """Extract important keywords from recent chat history."""
+def _normalize_messages(
+    messages: list[dict[str, object]],
+    limit: int = DEFAULT_HISTORY_LIMIT,
+) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
 
-    cleaned_history = history_text.strip()
-    if not cleaned_history:
-        return _KEYWORDS_EMPTY.copy()
-
-    keyword_list = _extract_keywords_with_yake(cleaned_history)
-    if keyword_list:
-        return _normalize_keyword_list(keyword_list, cleaned_history)
-
-    return _frequency_keywords(cleaned_history)
-
-
-def _llm_summary(history_text: str) -> str:
-    """Try a configured chatbot LLM before falling back to local logic."""
-
-    try:
-        from chatbot.chatbot_client import ChatBotClient
-    except Exception:
-        return ""
-
-    prompt = (
-        "Summarize the following recent chat history in 2 to 4 short sentences. "
-        "Focus on the main topics, questions, and decisions. Do not invent details.\n\n"
-        f"{history_text}"
-    )
-
-    try:
-        client = ChatBotClient()
-        response_text = client.chat(
-            prompt,
-            conversation=[],
-            system_prompt="You summarize recent group chat history.",
-        )
-    except Exception:
-        return ""
-
-    response_text = response_text.strip()
-    if not response_text:
-        return ""
-
-    if 2 <= _sentence_count(response_text) <= 4:
-        return response_text
-
-    return ""
-
-
-def _fallback_summary(history_text: str) -> str:
-    """Build a simple summary from message lines and extracted keywords."""
-
-    messages = _parse_history_lines(history_text)
-    if not messages:
-        return _SUMMARY_EMPTY
-
-    speakers = _extract_speakers(messages)
-    keywords = extract_keywords(history_text)
-    latest_speaker, latest_content = messages[-1]
-
-    sentence_one = _build_participant_sentence(speakers, len(messages))
-    sentence_two = _build_topic_sentence(keywords)
-    sentence_three = _build_latest_sentence(latest_speaker, latest_content)
-
-    sentences = [sentence for sentence in (sentence_one, sentence_two, sentence_three) if sentence]
-    return " ".join(sentences)
-
-
-def _build_participant_sentence(speakers: list[str], message_count: int) -> str:
-    if speakers:
-        speaker_text = _join_human_list(speakers[:4])
-        if len(speakers) > 4:
-            speaker_text = f"{speaker_text} and others"
-        return f"Recent chat involved {speaker_text} across {message_count} recent messages."
-
-    return f"Recent chat covered {message_count} recent messages."
-
-
-def _build_topic_sentence(keywords: list[str]) -> str:
-    if keywords:
-        topic_text = _join_human_list(keywords[:3])
-        return f"Main topics included {topic_text}."
-
-    return "The discussion stayed broad and did not surface a strong recurring topic."
-
-
-def _build_latest_sentence(latest_speaker: str, latest_content: str) -> str:
-    snippet = _shorten_text(latest_content, 18)
-    if latest_speaker:
-        return f"The latest exchange came from {latest_speaker} and focused on {snippet}."
-    return f"The latest exchange focused on {snippet}."
-
-
-def _extract_keywords_with_yake(history_text: str) -> list[str]:
-    try:
-        import yake
-    except Exception:
-        return []
-
-    try:
-        extractor = yake.KeywordExtractor(lan="en", n=3, top=_MAX_KEYWORDS)
-        results = extractor.extract_keywords(history_text)
-    except Exception:
-        return []
-
-    keywords: list[str] = []
-    for keyword, _score in results:
-        cleaned_keyword = _clean_keyword(str(keyword))
-        if cleaned_keyword:
-            keywords.append(cleaned_keyword)
-    return keywords
-
-
-def _frequency_keywords(history_text: str) -> list[str]:
-    tokens = _tokenize_words(history_text)
-    if not tokens:
-        return _KEYWORDS_EMPTY.copy()
-
-    counts: Counter[str] = Counter()
-    first_seen: dict[str, int] = {}
-
-    for index, token in enumerate(tokens):
-        normalized = token.lower()
-        if _is_stopword(normalized):
-            continue
-        if len(normalized) < 2 and not _contains_cjk(normalized):
+    for message in messages[-limit:]:
+        if not isinstance(message, dict):
             continue
 
-        counts[normalized] += 1
-        first_seen.setdefault(normalized, index)
-
-    if not counts:
-        return _KEYWORDS_EMPTY.copy()
-
-    ordered_terms = sorted(counts.items(), key=lambda item: (-item[1], first_seen[item[0]]))
-    keywords = [term for term, _count in ordered_terms[:_MAX_KEYWORDS]]
-
-    if len(keywords) < _MIN_KEYWORDS:
-        for token in tokens:
-            normalized = token.lower()
-            if _is_stopword(normalized):
-                continue
-            if normalized in keywords:
-                continue
-            keywords.append(normalized)
-            if len(keywords) >= min(_MIN_KEYWORDS, _MAX_KEYWORDS):
-                break
-
-    return keywords[:_MAX_KEYWORDS]
-
-
-def _normalize_keyword_list(keywords: Iterable[str], history_text: str) -> list[str]:
-    normalized_keywords: list[str] = []
-    seen: set[str] = set()
-
-    for keyword in keywords:
-        cleaned = _clean_keyword(keyword)
-        if not cleaned:
+        msg_type = str(message.get("type", "")).strip()
+        if msg_type not in {"chat", "bot_response"}:
             continue
 
-        key = cleaned.lower()
-        if key in seen:
+        content = str(message.get("content", "")).strip()
+        if not content:
             continue
 
-        seen.add(key)
-        normalized_keywords.append(cleaned)
-        if len(normalized_keywords) >= _MAX_KEYWORDS:
-            break
+        sender = str(message.get("sender", "")).strip() or "Unknown"
+        normalized.append({"sender": sender, "content": content, "type": msg_type})
 
-    if len(normalized_keywords) < _MIN_KEYWORDS:
-        supplemental_keywords = _frequency_keywords(history_text)
-        for keyword in supplemental_keywords:
-            if keyword in normalized_keywords:
-                continue
-            normalized_keywords.append(keyword)
-            if len(normalized_keywords) >= _MIN_KEYWORDS:
-                break
-
-    return normalized_keywords
+    return normalized
 
 
-def _clean_keyword(keyword: str) -> str:
-    cleaned = re.sub(r"\s+", " ", keyword.strip())
-    cleaned = cleaned.strip(".,;:!?()[]{}<>'\"`“”‘’")
-    return cleaned
+def _build_banned_tokens(messages: list[dict[str, str]]) -> set[str]:
+    banned = set(STOPWORDS)
+    banned.update(IGNORED_TOKENS)
+
+    for message in messages:
+        banned.update(_tokenize(message["sender"]))
+
+    return banned
 
 
-def _parse_history_lines(history_text: str) -> list[tuple[str, str]]:
-    messages: list[tuple[str, str]] = []
-    for line in history_text.splitlines():
-        stripped = line.strip()
+def _extract_informative_tokens(text: str, banned_tokens: set[str]) -> list[str]:
+    tokens = _tokenize(text)
+    return [
+        token
+        for token in tokens
+        if len(token) >= 3
+        and not token.startswith("/")
+        and token not in banned_tokens
+        and not token.isdigit()
+    ]
+
+
+def _history_text_to_messages(history_text: str) -> list[dict[str, object]]:
+    messages: list[dict[str, object]] = []
+
+    for raw_line in history_text.splitlines():
+        stripped = raw_line.strip()
         if not stripped:
             continue
 
-        speaker, content = _split_history_line(stripped)
-        if content:
-            messages.append((speaker, content))
+        sender = "Unknown"
+        content = stripped
+        if ":" in stripped:
+            prefix, suffix = stripped.split(":", 1)
+            sender = prefix.strip() or "Unknown"
+            content = suffix.strip()
+
+        msg_type = "bot_response" if sender.lower() == "bot" else "chat"
+        messages.append({"sender": sender, "content": content, "type": msg_type})
 
     return messages
 
 
-def _split_history_line(line: str) -> tuple[str, str]:
-    if ":" not in line:
-        return "", line.strip()
+def extract_keywords(messages: list[dict[str, object]], max_keywords: int = 5) -> list[str]:
+    """Return the top keywords from recent chat history."""
 
-    speaker, content = line.split(":", 1)
-    return speaker.strip(), content.strip()
+    normalized = _normalize_messages(messages)
+    if not normalized or max_keywords <= 0:
+        return []
+
+    banned_tokens = _build_banned_tokens(normalized)
+    counts: Counter[str] = Counter()
+
+    for message in normalized:
+        counts.update(_extract_informative_tokens(message["content"], banned_tokens))
+
+    if not counts:
+        return []
+
+    ranked_tokens = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [token for token, _count in ranked_tokens[:max_keywords]]
 
 
-def _extract_speakers(messages: list[tuple[str, str]]) -> list[str]:
-    speakers: list[str] = []
-    seen: set[str] = set()
+def generate_summary(messages: list[dict[str, object]], max_items: int = 2) -> str:
+    """Return a short summary built from the most informative recent messages."""
 
-    for speaker, _content in messages:
-        cleaned = speaker.strip()
-        if not cleaned:
+    normalized = _normalize_messages(messages)
+    if not normalized or max_items <= 0:
+        return SUMMARY_EMPTY_MESSAGE
+
+    banned_tokens = _build_banned_tokens(normalized)
+    token_counts: Counter[str] = Counter()
+    scored_messages: list[tuple[int, int, str]] = []
+
+    for message in normalized:
+        token_counts.update(_extract_informative_tokens(message["content"], banned_tokens))
+
+    if not token_counts:
+        return SUMMARY_EMPTY_MESSAGE
+
+    for index, message in enumerate(normalized):
+        tokens = _extract_informative_tokens(message["content"], banned_tokens)
+        if not tokens:
             continue
 
-        normalized = cleaned.lower()
-        if normalized in seen:
-            continue
+        unique_tokens = set(tokens)
+        score = sum(token_counts[token] for token in unique_tokens)
+        scored_messages.append((score, index, message["content"]))
 
-        seen.add(normalized)
-        speakers.append(cleaned)
+    if not scored_messages:
+        return SUMMARY_EMPTY_MESSAGE
 
-    return speakers
-
-
-def _tokenize_words(text: str) -> list[str]:
-    return re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]*|[\u4e00-\u9fff]+", text)
-
-
-def _sentence_count(text: str) -> int:
-    sentences = [segment.strip() for segment in re.split(r"(?<=[.!?。！？])\s+", text) if segment.strip()]
-    return len(sentences)
+    top_messages = sorted(scored_messages, key=lambda item: (-item[0], item[1]))[:max_items]
+    ordered_contents = [
+        content
+        for _score, _index, content in sorted(top_messages, key=lambda item: item[1])
+    ]
+    return " ".join(ordered_contents)
 
 
-def _shorten_text(text: str, max_words: int) -> str:
-    words = text.split()
-    if not words:
-        return "the recent discussion"
+def summarize_chat(history_text: str) -> str:
+    """Backward-compatible wrapper for callers that pass formatted chat text."""
 
-    if len(words) <= max_words:
-        return text.strip()
-
-    return " ".join(words[:max_words]).rstrip(".,;:!?") + "..."
+    return generate_summary(_history_text_to_messages(history_text))
 
 
-def _join_human_list(items: list[str]) -> str:
-    if not items:
-        return ""
-    if len(items) == 1:
-        return items[0]
-    if len(items) == 2:
-        return f"{items[0]} and {items[1]}"
-    return f"{', '.join(items[:-1])}, and {items[-1]}"
+def keywords_status(messages: list[dict[str, object]], max_keywords: int = 5) -> str:
+    """Return a display-ready keyword string for the GUI/server."""
+
+    keywords = extract_keywords(messages, max_keywords=max_keywords)
+    if not keywords:
+        return KEYWORDS_EMPTY_MESSAGE
+    return ", ".join(keywords)
 
 
-def _contains_cjk(text: str) -> bool:
-    return bool(re.search(r"[\u4e00-\u9fff]", text))
+def summary_status(messages: list[dict[str, object]]) -> str:
+    """Return a display-ready summary string for the GUI/server."""
 
-
-def _is_stopword(token: str) -> bool:
-    if token in _STOPWORDS:
-        return True
-
-    if token.startswith("http"):
-        return True
-
-    return False
+    return generate_summary(messages)

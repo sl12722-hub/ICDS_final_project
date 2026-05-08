@@ -1,95 +1,112 @@
-"""Chatbot client wrappers for Ollama and OpenAI-compatible APIs."""
+"""Client-side chatbot API wrapper.
+
+This module keeps chatbot API configuration in one place and always
+routes chatbot requests to the configured OpenAI-compatible model server.
+"""
 
 from __future__ import annotations
 
-try:
-    from ollama import Client
-except Exception:
-    Client = None
+import json
+import urllib.error
+import urllib.request
 
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
+from shared.ai_config import (
+    DEFAULT_OPENAI_MODEL,
+    get_openai_api_key,
+    get_openai_base_url,
+    get_openai_model,
+)
 
 
 class ChatBotClient:
+    """Small chatbot client for an OpenAI-compatible model endpoint."""
 
-    def __init__(self, name="3po", model="phi3:mini", host="http://localhost:11434", headers={"x-some-header": "some-value"}):
-        self.host = host
-        self.name = name
-        self.model = model
-        if Client is None:
-            self.client = None
-        else:
-            self.client = Client(host=self.host, headers=headers)
-        self.messages = []
+    DEFAULT_MODEL = DEFAULT_OPENAI_MODEL
 
-    def chat(self, message: str, conversation=None, system_prompt=None):
-        messages = list(self.messages) if conversation is None else []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        if conversation:
-            messages.extend(conversation)
+    def __init__(self) -> None:
+        # Load model configuration lazily so normal chat can start without
+        # requiring chatbot credentials in the environment.
+        self.api_key: str | None = None
+        self.base_url: str | None = None
+        self.model: str | None = None
 
-        messages.append({"role": "user", "content": message})
+    def chat(
+        self,
+        user_message: str,
+        conversation: list[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
+    ) -> str:
+        """Return a chatbot reply for the provided user message."""
 
-        if self.client is None:
-            raise RuntimeError("Ollama client package is not installed.")
+        prompt = user_message.strip()
+        if not prompt:
+            return "Please type something after @bot so I know what to answer."
 
-        response = self.client.chat(
-            self.model,
-            messages=messages,
-        )
-        msg = response["message"]["content"]
+        return self._request_model_response(prompt, conversation or [], system_prompt or "")
 
-        self.messages = messages + [{"role": "assistant", "content": msg}]
-        return msg
+    def _ensure_runtime_config(self) -> None:
+        """Load API configuration only when the chatbot is actually used."""
 
-    def stream_chat(self, message):
-        self.messages.append(
+        if self.api_key is None:
+            self.api_key = get_openai_api_key()
+        if self.base_url is None:
+            self.base_url = get_openai_base_url()
+        if self.model is None:
+            self.model = get_openai_model()
+
+    def _request_model_response(
+        self,
+        prompt: str,
+        conversation: list[dict[str, str]],
+        system_prompt: str,
+    ) -> str:
+        """Call the configured OpenAI-compatible chat completions endpoint."""
+
+        self._ensure_runtime_config()
+
+        messages = [
             {
-                "role": "user",
-                "content": message,
+                "role": "system",
+                "content": (
+                    system_prompt
+                    or "You are a helpful chatbot for a first-year CS chat project. "
+                    "Reply clearly and briefly."
+                ),
             }
+        ]
+        messages.extend(conversation)
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.7,
+        }
+
+        request = urllib.request.Request(
+            url=f"{self.base_url}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
         )
-        if self.client is None:
-            raise RuntimeError("Ollama client package is not installed.")
-        response = self.client.chat(self.model, self.messages, stream=True)
-        answer = ""
-        for chunk in response:
-            piece = chunk["message"]["content"]
-            print(piece, end="")
-            answer += piece
-        self.messages.append({"role": "assistant", "content": answer})
 
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                response_data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Chatbot API returned HTTP {error.code}: {detail}") from error
+        except urllib.error.URLError as error:
+            raise RuntimeError(f"Could not reach chatbot API: {error.reason}") from error
+        except TimeoutError as error:
+            raise RuntimeError("Chatbot API request timed out.") from error
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Chatbot API returned invalid JSON.") from error
 
-class ChatBotClientOpenAI():
-    def __init__(self, name="3po", model="phi3:mini", host="http://10.209.93.21:8000/v1", headers={"x-some-header": "some-value"}):
-        self.host = host
-        self.name = name
-        self.model = model
-        if OpenAI is None:
-            self.client = None
-        else:
-            self.client = OpenAI(api_key="EMPTY", base_url=self.host)
-        self.messages = []
-
-    def chat(self, messages):
-        if self.client is None:
-            raise RuntimeError("OpenAI client package is not installed.")
-
-        model_id = "/home/nlp/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775"
-
-        response = self.client.chat.completions.create(
-            messages=messages,
-            model=model_id,
-            temperature=0.3,
-        )
-        return response.choices[0].message.content
-
-
-if __name__ == "__main__":
-    c = ChatBotClient()
-    print(c.chat("Your name is Tom, and you are the learning assistant of Python programming."))
-    print(c.stream_chat("What's your name and role?"))
+        try:
+            return response_data["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError, TypeError) as error:
+            raise RuntimeError("Chatbot API response format was unexpected.") from error

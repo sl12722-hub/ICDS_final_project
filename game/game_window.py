@@ -60,8 +60,10 @@ class GameWindow:
         container = tk.Frame(self.root, padx=16, pady=16)
         container.pack()
 
-        tk.Label(container, textvariable=self.status_var, font=("TkDefaultFont", 12, "bold")).pack(pady=(0, 6))
-        tk.Label(container, textvariable=self.result_var, font=("TkDefaultFont", 11)).pack(pady=(0, 12))
+        tk.Label(container, textvariable=self.status_var, font=(
+            "TkDefaultFont", 12, "bold")).pack(pady=(0, 6))
+        tk.Label(container, textvariable=self.result_var,
+                 font=("TkDefaultFont", 11)).pack(pady=(0, 12))
 
         board_frame = tk.Frame(container)
         board_frame.pack()
@@ -79,7 +81,8 @@ class GameWindow:
                 button.grid(row=row, column=col, padx=3, pady=3)
                 self.buttons.append(button)
 
-        restart_button = tk.Button(container, text="Restart", command=self.reset_game)
+        restart_button = tk.Button(
+            container, text="Restart", command=self.reset_game)
         restart_button.pack(pady=(12, 0))
 
     def on_cell_click(self, row: int, col: int) -> None:
@@ -91,7 +94,8 @@ class GameWindow:
                 return
 
             index = row * 3 + col
-            self.buttons[index].config(text=self.game.board[index] or "", state="disabled")
+            self.buttons[index].config(
+                text=self.game.board[index] or "", state="disabled")
             self._refresh_labels()
             if self.game.is_game_over():
                 self._disable_board()
@@ -116,7 +120,8 @@ class GameWindow:
     def _start_message_listener(self) -> None:
         """Start a background thread to listen for server messages."""
 
-        thread = threading.Thread(target=self._listen_for_messages, daemon=True)
+        thread = threading.Thread(
+            target=self._listen_for_messages, daemon=True)
         thread.start()
 
     def _listen_for_messages(self) -> None:
@@ -185,7 +190,8 @@ class GameWindow:
             self.last_game_over_text = ""
 
         # Update the board in the UI
-        self.root.after(0, lambda: self._update_board_from_state(board, current_player, winner, is_draw, is_game_over))
+        self.root.after(0, lambda: self._update_board_from_state(
+            board, current_player, winner, is_draw, is_game_over))
 
     def _handle_error(self, message: dict) -> None:
         """Handle error messages from the server."""
@@ -198,7 +204,8 @@ class GameWindow:
 
         # Update board buttons
         for i, cell in enumerate(board):
-            self.buttons[i].config(text=cell or "", state="disabled" if cell else "normal")
+            self.buttons[i].config(
+                text=cell or "", state="disabled" if cell else "normal")
 
         # Update status
         if current_player:
