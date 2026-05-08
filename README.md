@@ -1,67 +1,276 @@
 # ICDS Final Project
 
-This project now uses one shared JSON message protocol for all socket
-communication between the server and clients.
+## Team Members
 
-## Project Structure
+Fill in your final team list here before submission.
 
-```text
-project/
-  server/
-    server.py
-    protocol.py
-    chat_history.py
-    game_manager.py
+- `[Member 1 Name]` - `[Role / contribution summary]`
+- `[Member 2 Name]` - `[Role / contribution summary]`
+- `[Member 3 Name]` - `[Role / contribution summary]`
+- `[Member 4 Name]` - `[Role / contribution summary]`
 
-  client/
-    client.py
-    gui_client.py
+## Project Overview
 
-  chatbot/
-    chatbot_client.py
-    chatbot_manager.py
+This project is a Python socket-based group chat system with a Tkinter GUI client and a threaded server. The system supports real-time messaging between multiple users, chatbot interaction, a multiplayer Tic-Tac-Toe game, and several bonus features such as chat summary, keyword extraction, sentiment display, and optional AI picture generation.
 
-  game/
-    tic_tac_toe.py
-    game_window.py
+The project uses one shared JSON message protocol for all communication between the server and clients. This keeps the code organized and makes it easier to extend new features without changing the basic socket structure.
 
-  bonus/
-    sentiment.py
-    summary_keywords.py
-    ai_picture.py
+## Main Features
 
-  docs/
-    pi_mono_usage.md
-    demo_script.md
+- GUI chat client with username login, online user list, message area, and send box
+- Multi-user chat through one threaded server
+- Chatbot support with per-user memory and personality switching
+- Group chatbot interaction through `@bot`
+- Multiplayer Tic-Tac-Toe with room creation and room joining
+- Chat summary with `/summary`
+- Keyword extraction with `/keywords`
+- Sentiment labels shown beside chat messages
+- Optional AI picture generation with `/aipic: ...`
+- Friendly GUI error messages and readable server logs for demo use
 
-  README.md
+## Required Packages
+
+This project mainly uses the Python standard library. The extra packages below are needed for optional AI features.
+
+- Python `3.10+` recommended
+- `requests`
+- `Pillow` for AI image preview
+- `tkinter` for the GUI
+
+Install the non-standard packages with:
+
+```bash
+python3 -m pip install requests pillow
 ```
 
-Current feature status:
+Notes:
 
-- `server/` and `client/` contain working chat code.
-- `chatbot/`, `game/`, and `bonus/` contain safe placeholder modules for future issues.
-- No file uses a standard-library-conflicting name such as `json.py`, `socket.py`, `sys.py`, or `tkinter.py`.
+- `tkinter` is included with many Python installations, but some environments may require a Python build that includes Tk support.
+- If you only want normal chat, summary, keywords, and game features, you do not need AI credentials.
 
-## Unified Message Format
+## How to Run
 
-Every message sent over the socket follows this dictionary shape:
+### 1. Enter the project folder
+
+```bash
+cd "/Users/sitongli/Desktop/ICDS final project"
+```
+
+### 2. Optional: configure AI environment variables
+
+These are only needed for chatbot replies and AI picture generation.
+
+```bash
+export OPENAI_API_KEY="your_key_here"
+export OPENAI_BASE_URL="https://your-openai-compatible-endpoint"
+export OPENAI_MODEL="your-model-name"
+```
+
+Notes:
+
+- `OPENAI_API_KEY` is required only when you actually use the chatbot or AI picture feature.
+- Normal chat, game, summary, keywords, and sentiment can run without these environment variables.
+
+### 3. Start the server
+
+Open a Terminal window and run:
+
+```bash
+python3 -m server.server
+```
+
+If the server starts correctly, the terminal should show a log like:
+
+```text
+Server listening on 0.0.0.0:12345
+```
+
+### 4. Start GUI clients
+
+Open a second Terminal window:
+
+```bash
+cd "/Users/sitongli/Desktop/ICDS final project"
+python3 -m client.gui_client
+```
+
+Open a third Terminal window for another user:
+
+```bash
+cd "/Users/sitongli/Desktop/ICDS final project"
+python3 -m client.gui_client
+```
+
+In each GUI window:
+
+1. Set `Host` to `127.0.0.1`
+2. Set `Port` to `12345`
+3. Enter a different username, such as `Alice` and `Bob`
+4. Click `Connect`
+
+After connecting, the message box becomes editable and you can start chatting.
+
+### 5. Optional terminal client
+
+There is also a terminal client in [client.py](/Users/sitongli/Desktop/ICDS final project/client/client.py), but the GUI client is the main interface used for the final project features and demo.
+
+## Commands
+
+Use these commands in the GUI message input box unless noted otherwise.
+
+### Chatbot
+
+Main supported command:
+
+```text
+@bot explain recursion simply
+```
+
+The chatbot also keeps short recent memory for each user, so prompts like these can work:
+
+```text
+@bot my name is Alice
+@bot what is my name?
+```
+
+Personality command:
+
+```text
+/personality friendly
+/personality funny
+/personality serious
+```
+
+Important note:
+
+- The current project uses `@bot` as the working chatbot trigger.
+- `/bot:` appeared in earlier planning text, but it is not the main implemented GUI command now.
+
+### Summary and Keywords
+
+```text
+/summary
+/keywords
+```
+
+- `/summary` returns a short summary based on recent public chat history.
+- `/keywords` returns the most frequent informative keywords from recent public chat history.
+- These responses are sent privately to the requesting client.
+
+### AI Picture Generation
+
+```text
+/aipic: a white cat sitting in a classroom drawing on the blackboard
+```
+
+- This feature is optional.
+- It requires working AI configuration and internet access.
+- Generated images are saved in the `generated_images/` folder.
+
+### Game Usage
+
+The Tic-Tac-Toe feature is currently controlled through GUI buttons, not slash commands.
+
+1. One player clicks `Create Game`
+2. The server returns a room ID
+3. Another player enters that room ID in the `Room ID` box
+4. The second player clicks `Join Game`
+5. Both players receive a Tic-Tac-Toe window
+
+Important note:
+
+- `/game create` and `/game join` are not implemented as chat commands in the current version.
+- Game creation and joining are done through the GUI controls.
+
+## System Architecture
+
+### High-level structure
+
+```text
+GUI Client / Terminal Client
+          |
+          v
+   Shared JSON Protocol
+          |
+          v
+      Chat Server
+      /    |    \
+ ChatHistory GameManager ChatbotManager
+                    |
+                    v
+              ChatBotClient
+```
+
+### Main folders
+
+```text
+client/
+  gui_client.py       Tkinter GUI client
+  client.py           terminal client
+
+server/
+  server.py           main threaded chat server
+  protocol.py         shared JSON message format
+  chat_history.py     recent public chat storage
+  game_manager.py     multiplayer game room logic
+
+chatbot/
+  chatbot_manager.py  command parsing, personality, memory
+  chatbot_client.py   OpenAI-compatible chatbot API wrapper
+
+game/
+  tic_tac_toe.py      game rules
+  game_window.py      Tkinter game window
+
+bonus/
+  sentiment.py        message sentiment labels
+  summary_keywords.py offline summary and keyword extraction
+  ai_picture.py       optional AI image generation
+
+shared/
+  ai_config.py        shared AI environment config helpers
+
+tests/
+  test_chatbot_client.py
+  test_summary_keywords.py
+  test_error_handling.py
+```
+
+### Component responsibilities
+
+- `server/server.py` accepts clients, routes protocol messages, logs events, and coordinates all features.
+- `client/gui_client.py` handles GUI login, chat display, commands, game actions, and user-friendly error messages.
+- `server/protocol.py` defines the message format used everywhere.
+- `server/chat_history.py` stores recent public chat messages for summary and keywords.
+- `chatbot/chatbot_manager.py` handles `@bot` and `/personality`.
+- `server/game_manager.py` manages Tic-Tac-Toe rooms, turns, and move validation.
+- `bonus/summary_keywords.py` runs offline text analysis without extra APIs.
+
+## Message Protocol
+
+All socket communication uses newline-delimited JSON dictionaries with this shape:
 
 ```python
 {
     "type": "chat",
-    "sender": "Ryan",
+    "sender": "Alice",
     "target": "all",
     "content": "Hello everyone",
-    "timestamp": "2026-05-02 20:00:00",
+    "timestamp": "2026-05-09 20:00:00",
     "extra": {}
 }
 ```
 
-Messages are sent as newline-delimited JSON. This keeps the socket logic
-simple because the server and clients can read one full message at a time.
+### Standard fields
 
-## Supported Message Types
+- `type`: message type
+- `sender`: username or system component
+- `target`: `all` or a specific user
+- `content`: main text payload
+- `timestamp`: message time
+- `extra`: extra structured data for special features
+
+### Supported message types
 
 - `chat`
 - `system`
@@ -80,97 +289,121 @@ simple because the server and clients can read one full message at a time.
 - `sentiment_result`
 - `error`
 
-## Protocol Helper Functions
+### Protocol helpers
 
-`server/protocol.py` provides:
+Defined in [protocol.py](/Users/sitongli/Desktop/ICDS final project/server/protocol.py):
 
-- `create_message(msg_type, sender, content, target="all", extra=None)`
-- `encode_message(message)`
-- `decode_message(raw_data)`
+- `create_message(...)`
+- `encode_message(...)`
+- `decode_message(...)`
 
-## How To Run
+## Feature Demo Guide
 
-Open a terminal in the project folder and start the server:
+This order works well for a class demo.
 
-```bash
-python -m server.server
-```
+### 1. Normal chat
 
-Open a second terminal for the first client:
+1. Start the server
+2. Open two GUI clients
+3. Connect as two different users
+4. Send a few messages between the two windows
+5. Show that both the sender and receiver see updates in real time
 
-```bash
-python -m client.client --username Ryan
-```
+### 2. Sentiment analysis
 
-Open a third terminal for the second client:
-
-```bash
-python -m client.client --username Alex
-```
-
-You can also start the GUI client instead of the terminal client:
-
-```bash
-python -m client.gui_client
-```
-
-The GUI client includes:
-
-- a username login field
-- a scrollable message display area
-- a text input box
-- a Send button
-- a connection status label
-- an optional online user list
-- a basic `/bot:` command for chatbot replies
-- a bot personality dropdown with memory of recent bot exchanges
-
-If the username field is left empty, the GUI will automatically use a
-default name such as `Guest_1234`.
-
-Example chatbot command:
+Send messages such as:
 
 ```text
-/bot: explain recursion in simple words
+I am very happy today!
+I am stressed about the deadline.
 ```
 
-You can change chatbot personality with either the GUI dropdown or a command:
+Show that the GUI adds sentiment labels to chat messages.
+
+### 3. Keywords
+
+Send a few topic-related messages, then type:
 
 ```text
-/personality friendly
+/keywords
+```
+
+Show that the requesting client receives a private `Keywords: ...` response.
+
+### 4. Summary
+
+After more chat messages, type:
+
+```text
+/summary
+```
+
+Show that the requesting client receives a private `Summary: ...` response.
+
+### 5. Chatbot
+
+If AI credentials are configured, type:
+
+```text
+@bot explain recursion simply
+```
+
+Then test short memory:
+
+```text
+@bot my name is Alice
+@bot what is my name?
+```
+
+Then change personality:
+
+```text
 /personality funny
-/personality serious
 ```
 
-The chatbot keeps a short recent memory for each user, so prompts like these
-can work in sequence:
+### 6. Multiplayer Tic-Tac-Toe
+
+1. Player A clicks `Create Game`
+2. Show the generated room ID
+3. Player B enters the room ID and clicks `Join Game`
+4. Play a few moves and show board synchronization
+
+### 7. Optional AI picture
+
+If AI configuration is available, type:
 
 ```text
-/bot: My name is Ryan.
-/bot: What is my name?
+/aipic: a futuristic campus poster with students and robots
 ```
 
-## Import Safety
+Show the saved image path and preview window.
 
-- Each feature folder is a Python package with an `__init__.py` file.
-- Shared socket message helpers stay in `server/protocol.py`.
-- New folders were added without renaming `server/server.py` or `client/client.py`, so existing run commands still work.
+## Known Limitations
 
-## How To Test Normal Chat With Two Clients
+- Chatbot and AI picture generation depend on working external AI configuration and internet access.
+- The terminal client does not expose all GUI-only project features.
+- Tic-Tac-Toe is launched through GUI buttons rather than chat commands.
+- Chat summary and keywords are based only on recent public chat history, not the full session forever.
+- Sentiment analysis is lightweight and may not always match human judgment.
+- AI image quality depends on the external model and image service response.
+- Team member names and final contribution details still need to be filled in before submission.
 
-1. Run `python -m server.server`.
-2. Open the first GUI client with `python -m client.gui_client`.
-3. Open the second GUI client with `python -m client.gui_client`.
-4. Enter different usernames in both windows and click `Connect`.
-5. Type `Hello` in the first window and press `Enter` or click `Send`.
-6. Check that the first GUI shows the sent message and the second GUI shows the received message.
-7. Send a reply from the second GUI and confirm both windows update without freezing.
-8. Close one GUI window and confirm it disconnects safely while the other GUI stays responsive.
+## Member Contributions
 
-## Safety Checks
+Replace this placeholder section with your final team breakdown.
 
-- Invalid JSON data is caught and returns an `error` message instead of crashing the server.
-- Missing required fields are caught by protocol validation.
-- Unknown message types return an `error` message.
-- The server ignores client-created `error` messages and blocks client-created `system` messages.
-- Placeholder modules were added for future chatbot, game, and bonus features without changing current chat behavior.
+- `[Member 1 Name]`: server architecture, protocol, integration
+- `[Member 2 Name]`: GUI client, usability, demo preparation
+- `[Member 3 Name]`: chatbot, AI integration
+- `[Member 4 Name]`: game logic, testing, documentation
+
+## Quick Start Checklist
+
+For a grader or TA who wants the shortest path:
+
+1. Install `requests` and `pillow`
+2. Run `python3 -m server.server`
+3. Run `python3 -m client.gui_client` in two more terminals
+4. Connect both GUI clients to `127.0.0.1:12345`
+5. Test normal chat, `/summary`, `/keywords`, and the game buttons
+6. If AI credentials are available, test `@bot` and `/aipic: ...`
