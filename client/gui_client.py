@@ -7,8 +7,10 @@ import random
 import socket
 import threading
 import tkinter as tk
+from pathlib import Path
 from tkinter import messagebox, scrolledtext
 
+from bonus.ai_picture import show_image_preview, try_aipic_reply
 from chatbot.chatbot_manager import ChatbotManager
 from server.protocol import ProtocolError, create_message, decode_message, encode_message
 
@@ -30,6 +32,7 @@ class GUIChatClient:
         self.connection_id = 0
         self.disconnect_requested = False
         self.chatbot_manager = ChatbotManager()
+        self.project_root = Path(__file__).resolve().parents[1]
 
         self.host_var = tk.StringVar(value="127.0.0.1")
         self.port_var = tk.StringVar(value="12345")
@@ -194,6 +197,16 @@ class GUIChatClient:
             self.message_var.set("")
             self.message_entry.focus_set()
             self.handle_personality_command(content)
+            return
+
+        aipic_reply = try_aipic_reply(content, output_root=self.project_root)
+        if aipic_reply is not None:
+            self.message_var.set("")
+            self.message_entry.focus_set()
+            self.show_local_system_message(aipic_reply)
+            if aipic_reply.startswith("Generated image saved: "):
+                relative_path = aipic_reply.split(": ", 1)[1].strip()
+                show_image_preview(str(self.project_root / relative_path), master=self.root)
             return
 
         # NOTE: Do not handle @bot locally. Send mentions to the server so
