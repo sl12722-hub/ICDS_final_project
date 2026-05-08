@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import io
-import os
+import json
 import re
 from pathlib import Path
 from urllib.parse import quote
 
 import requests
+from shared.ai_config import get_openai_api_key, get_openai_base_url, get_openai_model
 
 try:
     from PIL import Image, ImageTk
@@ -31,6 +32,53 @@ REQUEST_TIMEOUT = 60
 
 class AIPictureError(Exception):
     """Raised when AI picture generation fails."""
+
+def _build_image_prompt_with_llm(prompt: str) -> str:
+    """Use the configured LLM to turn a user request into a concise image prompt."""
+
+    system_prompt = (
+        "You write production-ready prompts for text-to-image models. "
+        "Return one concise visual prompt only. "
+        "Do not add markdown, labels, explanations, or quotation marks."
+    )
+    payload = {
+        "model": get_openai_model(),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    "Rewrite this into a vivid image-generation prompt with subject, style, "
+                    "lighting, composition, and quality hints when useful. "
+                    f"User request: {prompt}"
+                ),
+            },
+        ],
+        "temperature": 0.4,
+    }
+
+    try:
+        response = requests.post(
+            f"{get_openai_base_url()}/chat/completions",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {get_openai_api_key()}",
+            },
+            data=json.dumps(payload),
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise AIPictureError(f"Prompt model request failed: {exc}") from exc
+
+    try:
+        content = response.json()["choices"][0]["message"]["content"].strip()
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise AIPictureError("Prompt model returned an unexpected response.") from exc
+
+    if not content:
+        raise AIPictureError("Prompt model returned an empty prompt.")
+    return content
 
 
 def parse_aipic_prompt(message: str) -> str | None:
@@ -64,13 +112,15 @@ def _ensure_unique_path(folder: Path, stem: str) -> Path:
 
 def generate_image(prompt: str, output_root: Path | None = None) -> str:
     """
-    Generate image via Pollinations.ai and save under generated_images/.
+    Generate image using the configured LLM for prompt writing and Pollinations for rendering.
 
     Returns a relative path like 'generated_images/example.png'.
     """
     cleaned_prompt = prompt.strip()
     if not cleaned_prompt:
         raise AIPictureError("Empty image prompt.")
+
+    rendered_prompt = _build_image_prompt_with_llm(cleaned_prompt)
 
     root = output_root if output_root is not None else Path.cwd()
     output_dir = root / OUTPUT_DIR_NAME
@@ -79,7 +129,7 @@ def generate_image(prompt: str, output_root: Path | None = None) -> str:
 
     try:
         response = requests.get(
-            f"{POLLINATIONS_URL}/{quote(cleaned_prompt)}",
+            f"{POLLINATIONS_URL}/{quote(rendered_prompt)}",
             params={"model": "flux", "width": 768, "height": 768},
             timeout=REQUEST_TIMEOUT,
         )
