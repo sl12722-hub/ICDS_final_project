@@ -16,6 +16,9 @@ from chatbot.chatbot_manager import ChatbotManager
 from game.game_window import GameWindow
 from server.protocol import ProtocolError, create_message, decode_message, encode_message
 
+SUMMARY_COMMAND = "/summary"
+KEYWORDS_COMMAND = "/keywords"
+
 
 class GUIChatClient:
     """Small GUI wrapper around the same chat socket protocol."""
@@ -230,6 +233,14 @@ class GUIChatClient:
             self.handle_personality_command(content)
             return
 
+        if content == SUMMARY_COMMAND:
+            self.send_analysis_request("summary_request", "summary")
+            return
+
+        if content == KEYWORDS_COMMAND:
+            self.send_analysis_request("keywords_request", "keywords")
+            return
+
         aipic_reply = try_aipic_reply(content, output_root=self.project_root)
         if aipic_reply is not None:
             self.message_var.set("")
@@ -256,6 +267,26 @@ class GUIChatClient:
             messagebox.showerror("Send failed", str(error))
             self.handle_disconnect()
 
+    def send_analysis_request(self, message_type: str, label: str) -> None:
+        """Send a private server-side analysis request."""
+
+        if self.client_socket is None:
+            return
+
+        username = self.username_var.get().strip()
+        if not username:
+            return
+
+        try:
+            message = create_message(message_type, username, label)
+            self.client_socket.sendall(encode_message(message))
+            self.message_var.set("")
+            self.message_entry.focus_set()
+        except OSError as error:
+            self.status_var.set("Status: Disconnected")
+            messagebox.showerror(f"{label.title()} request failed", str(error))
+            self.handle_disconnect()
+
     def format_message(self, message: dict[str, object]) -> str:
         """Format protocol messages for the chat window."""
 
@@ -274,6 +305,12 @@ class GUIChatClient:
 
         if message["type"] == "error":
             return f"Error: {message['content']}\n"
+
+        if message["type"] == "summary_response":
+            return f"Summary: {message['content']}\n"
+
+        if message["type"] == "keywords_response":
+            return f"Keywords: {message['content']}\n"
 
         return f"{message['sender']}: {message['content']}\n"
 

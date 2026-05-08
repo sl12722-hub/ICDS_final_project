@@ -8,6 +8,7 @@ import socket
 import threading
 from dataclasses import dataclass
 
+from bonus.summary_keywords import KEYWORDS_EMPTY_MESSAGE, SUMMARY_EMPTY_MESSAGE, extract_keywords, generate_summary
 from chatbot.chatbot_manager import ChatbotManager
 from server.chat_history import ChatHistory
 from server.game_manager import GameManager
@@ -39,6 +40,7 @@ class ChatServer:
         self.chat_history = ChatHistory()
         self.game_manager = GameManager()
         self.history_limit = 12
+        self.summary_history_limit = 30
         self.bot_mention_pattern = re.compile(r"(?i)(?<!\w)@bot\b")
         self.lock = threading.Lock()
 
@@ -127,6 +129,14 @@ class ChatServer:
             row = int(extra.get("row", -1))
             col = int(extra.get("col", -1))
             self._handle_game_move(source_socket, sender_name, room_id, row, col)
+            return
+
+        if msg_type == "summary_request":
+            self._handle_summary_request(source_socket, sender_name)
+            return
+
+        if msg_type == "keywords_request":
+            self._handle_keywords_request(source_socket, sender_name)
             return
 
         self._announce_join_if_needed(source_socket)
@@ -372,6 +382,38 @@ class ChatServer:
         bot_message = create_message("bot_response", "Bot", response_text)
         self.broadcast(bot_message)
         self._record_group_message(bot_message)
+
+    def _handle_summary_request(self, requester_socket: socket.socket, requester_name: str) -> None:
+        """Generate a private summary from recent public chat history."""
+
+        with self.lock:
+            recent_messages = self.chat_history.get_recent_messages(self.summary_history_limit)
+
+        summary_text = generate_summary(recent_messages)
+        response_text = summary_text or SUMMARY_EMPTY_MESSAGE
+        response_message = create_message(
+            "summary_response",
+            "Server",
+            response_text,
+            target=requester_name,
+        )
+        self._safe_send_bytes(requester_socket, encode_message(response_message))
+
+    def _handle_keywords_request(self, requester_socket: socket.socket, requester_name: str) -> None:
+        """Generate private keywords from recent public chat history."""
+
+        with self.lock:
+            recent_messages = self.chat_history.get_recent_messages(self.summary_history_limit)
+
+        keywords = extract_keywords(recent_messages)
+        response_text = ", ".join(keywords) if keywords else KEYWORDS_EMPTY_MESSAGE
+        response_message = create_message(
+            "keywords_response",
+            "Server",
+            response_text,
+            target=requester_name,
+        )
+        self._safe_send_bytes(requester_socket, encode_message(response_message))
 
     def _handle_game_create(self, creator_socket: socket.socket, creator_name: str) -> None:
         """Create a new game room and send the room ID to the creator."""
