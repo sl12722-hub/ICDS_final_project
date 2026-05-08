@@ -7,10 +7,12 @@ import random
 import socket
 import threading
 import tkinter as tk
+from pathlib import Path
 from tkinter import messagebox, scrolledtext
 
-from bonus.sentiment import analyze_sentiment
+from bonus.ai_picture import show_image_preview, try_aipic_reply
 from chatbot.chatbot_manager import ChatbotManager
+from game.game_window import GameWindow
 from server.protocol import ProtocolError, create_message, decode_message, encode_message
 
 
@@ -31,6 +33,7 @@ class GUIChatClient:
         self.connection_id = 0
         self.disconnect_requested = False
         self.chatbot_manager = ChatbotManager()
+        self.project_root = Path(__file__).resolve().parents[1]
 
         self.host_var = tk.StringVar(value="127.0.0.1")
         self.port_var = tk.StringVar(value="12345")
@@ -38,6 +41,11 @@ class GUIChatClient:
         self.personality_var = tk.StringVar(value=self.chatbot_manager.get_personality_label(None))
         self.message_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Status: Disconnected")
+        self.game_room_var = tk.StringVar()
+        self.game_status_var = tk.StringVar(value="Game: Not in room")
+        self.current_room_id = ""
+        self.active_game_window: GameWindow | None = None
+        self.active_game_symbol = ""
 
         self.build_gui()
         self.root.protocol("WM_DELETE_WINDOW", self.close_window)
@@ -83,6 +91,27 @@ class GUIChatClient:
             pady=4,
         )
         self.status_label.pack(fill="x")
+
+        game_frame = tk.LabelFrame(self.root, text="Game", padx=10, pady=8)
+        game_frame.pack(fill="x", padx=10, pady=(0, 8))
+
+        self.create_game_button = tk.Button(game_frame, text="Create Game", command=self.create_game_room, state="disabled")
+        self.create_game_button.grid(row=0, column=0, padx=(0, 8), pady=2)
+
+        tk.Label(game_frame, text="Room ID").grid(row=0, column=1, sticky="w")
+        self.room_id_entry = tk.Entry(game_frame, textvariable=self.game_room_var, width=16, state="disabled")
+        self.room_id_entry.grid(row=0, column=2, padx=6, pady=2)
+
+        self.join_game_button = tk.Button(game_frame, text="Join Game", command=self.join_game_room, state="disabled")
+        self.join_game_button.grid(row=0, column=3, padx=(2, 0), pady=2)
+
+        tk.Label(game_frame, textvariable=self.game_status_var, anchor="w").grid(
+            row=1,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(6, 0),
+        )
 
         center_frame = tk.Frame(self.root, padx=10, pady=10)
         center_frame.pack(fill="both", expand=True, pady=(0, 10))
@@ -135,9 +164,12 @@ class GUIChatClient:
         self.clear_ui_queue()
         self.connect_button.config(state="disabled")
         self.send_button.config(state="normal")
+        self.create_game_button.config(state="normal")
+        self.join_game_button.config(state="normal")
         self.host_entry.config(state="disabled")
         self.port_entry.config(state="disabled")
         self.username_entry.config(state="disabled")
+        self.room_id_entry.config(state="normal")
         self.message_entry.config(state="normal")
         self.message_entry.focus_set()
         self.status_var.set(f"Status: Connected as {username}")
@@ -195,6 +227,16 @@ class GUIChatClient:
             self.message_var.set("")
             self.message_entry.focus_set()
             self.handle_personality_command(content)
+            return
+
+        aipic_reply = try_aipic_reply(content, output_root=self.project_root)
+        if aipic_reply is not None:
+            self.message_var.set("")
+            self.message_entry.focus_set()
+            self.show_local_system_message(aipic_reply)
+            if aipic_reply.startswith("Generated image saved: "):
+                relative_path = aipic_reply.split(": ", 1)[1].strip()
+                show_image_preview(str(self.project_root / relative_path), master=self.root)
             return
 
         # NOTE: Do not handle @bot locally. Send mentions to the server so
@@ -260,12 +302,62 @@ class GUIChatClient:
         self.client_socket = None
         self.connect_button.config(state="normal")
         self.send_button.config(state="disabled")
+        self.create_game_button.config(state="disabled")
+        self.join_game_button.config(state="disabled")
         self.host_entry.config(state="normal")
         self.port_entry.config(state="normal")
         self.username_entry.config(state="normal")
+        self.room_id_entry.config(state="disabled")
         self.message_entry.config(state="disabled")
         self.status_var.set("Status: Disconnected")
+        self.game_status_var.set("Game: Not in room")
+        self.current_room_id = ""
+        self.active_game_symbol = ""
         self.update_user_list([])
+
+    def create_game_room(self) -> None:
+        """Send a game_create request using the current socket."""
+
+        if self.client_socket is None:
+            return
+
+        username = self.username_var.get().strip()
+        if not username:
+            return
+
+        try:
+            message = create_message("game_create", username, "create room")
+            self.client_socket.sendall(encode_message(message))
+            self.game_status_var.set("Game: Creating room...")
+        except OSError as error:
+            self.status_var.set("Status: Disconnected")
+            messagebox.showerror("Create game failed", str(error))
+            self.handle_disconnect()
+
+    def join_game_room(self) -> None:
+        """Send a game_join request with the room ID from input."""
+
+        if self.client_socket is None:
+            return
+
+        username = self.username_var.get().strip()
+        room_id = self.game_room_var.get().strip()
+        if not username or not room_id:
+            return
+
+        try:
+            message = create_message(
+                "game_join",
+                username,
+                f"join {room_id}",
+                extra={"room_id": room_id},
+            )
+            self.client_socket.sendall(encode_message(message))
+            self.game_status_var.set(f"Game: Joining room {room_id}...")
+        except OSError as error:
+            self.status_var.set("Status: Disconnected")
+            messagebox.showerror("Join game failed", str(error))
+            self.handle_disconnect()
 
     def process_ui_queue(self) -> None:
         """Apply background-thread updates from the main Tkinter thread."""
@@ -355,7 +447,99 @@ class GUIChatClient:
             if isinstance(user_list, list):
                 self.update_user_list(user_list)
 
+        self.handle_game_message(message)
+
         self.add_text(self.format_message(message))
+
+    def handle_game_message(self, message: dict[str, object]) -> None:
+        """Handle game protocol messages and drive game UI state."""
+
+        msg_type = str(message.get("type", ""))
+        extra = message.get("extra", {})
+        if not isinstance(extra, dict):
+            return
+
+        if msg_type == "game_create":
+            room_id = str(extra.get("room_id", "")).strip()
+            if room_id:
+                self.current_room_id = room_id
+                self.game_room_var.set(room_id)
+                self.game_status_var.set(f"Game: Room {room_id} created")
+
+        elif msg_type == "game_start":
+            room_id = str(extra.get("room_id", "")).strip()
+            x_player = str(extra.get("x_player", "")).strip()
+            o_player = str(extra.get("o_player", "")).strip()
+            username = self.username_var.get().strip()
+
+            symbol = ""
+            if username and username == x_player:
+                symbol = "X"
+            elif username and username == o_player:
+                symbol = "O"
+
+            self.current_room_id = room_id
+            self.active_game_symbol = symbol
+            self.game_room_var.set(room_id)
+            self.game_status_var.set(f"Game: Started in room {room_id} as {symbol or '?'}")
+            self.open_game_window(room_id, symbol)
+            if self.active_game_window is not None:
+                self.active_game_window.handle_server_message(message)
+
+        elif msg_type == "game_state":
+            if self.active_game_window is not None:
+                self.active_game_window.handle_server_message(message)
+
+            winner = extra.get("winner")
+            is_draw = bool(extra.get("is_draw", False))
+            is_game_over = bool(extra.get("is_game_over", False))
+            if is_game_over:
+                if winner:
+                    self.game_status_var.set(f"Game: Winner {winner}")
+                    self.add_text(f"System: Game result - {winner} wins\n")
+                elif is_draw:
+                    self.game_status_var.set("Game: Draw")
+                    self.add_text("System: Game result - Draw\n")
+
+        elif msg_type == "error":
+            text = str(message.get("content", ""))
+            if "game" in text.lower() or "room" in text.lower() or "turn" in text.lower() or "move" in text.lower():
+                self.game_status_var.set(f"Game: {text}")
+
+    def open_game_window(self, room_id: str, symbol: str) -> None:
+        """Open (or focus) the game window without blocking the chat GUI."""
+
+        if self.client_socket is None:
+            return
+
+        if self.active_game_window is not None:
+            try:
+                self.active_game_window.root.lift()
+                self.active_game_window.root.focus_force()
+                return
+            except tk.TclError:
+                self.active_game_window = None
+
+        self.active_game_window = GameWindow(
+            socket_obj=self.client_socket,
+            room_id=room_id,
+            player_symbol=symbol,
+            username=self.username_var.get().strip(),
+            parent=self.root,
+            auto_listen=False,
+        )
+        self.active_game_window.root.bind("<Destroy>", self._on_game_window_destroy, add="+")
+
+    def _on_game_window_destroy(self, _event: tk.Event) -> None:
+        """Forget closed game window instances."""
+
+        if self.active_game_window is None:
+            return
+        try:
+            if not self.active_game_window.root.winfo_exists():
+                self.active_game_window = None
+        except tk.TclError:
+            self.active_game_window = None
 
     def update_user_list(self, user_list: list[str]) -> None:
         """Refresh the online user list panel."""
