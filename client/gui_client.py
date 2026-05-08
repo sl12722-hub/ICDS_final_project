@@ -196,11 +196,8 @@ class GUIChatClient:
             self.handle_personality_command(content)
             return
 
-        if self.chatbot_manager.is_bot_command(content):
-            self.message_var.set("")
-            self.message_entry.focus_set()
-            self.start_bot_request(content)
-            return
+        # NOTE: Do not handle @bot locally. Send mentions to the server so
+        # the server can coordinate a single group reply and broadcast it.
 
         if self.client_socket is None:
             return

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import re
 import socket
 import threading
 from dataclasses import dataclass
 
+from chatbot.chatbot_manager import ChatbotManager
+from server.chat_history import ChatHistory
+from server.game_manager import GameManager
 from server.protocol import MESSAGE_TYPES, ProtocolError, create_message, decode_message, encode_message
 
 
@@ -31,6 +35,11 @@ class ChatServer:
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.clients: dict[socket.socket, ClientConnection] = {}
         self.name_to_socket: dict[str, socket.socket] = {}
+        self.chatbot_manager = ChatbotManager()
+        self.chat_history = ChatHistory()
+        self.game_manager = GameManager()
+        self.history_limit = 12
+        self.bot_mention_pattern = re.compile(r"(?i)(?<!\w)@bot\b")
         self.lock = threading.Lock()
 
     def start(self) -> None:
@@ -95,10 +104,29 @@ class ChatServer:
         if msg_type == "error":
             return
 
+        if msg_type in {"game_state", "game_end"}:
+            return
+
         sender_name = self._normalize_name(message["sender"], source_socket)
         self._update_client_name(source_socket, sender_name)
         if extra.get("event") == "login":
             self._announce_join_if_needed(source_socket)
+            return
+
+        if msg_type == "game_create":
+            self._handle_game_create(source_socket, sender_name)
+            return
+
+        if msg_type == "game_join":
+            room_id = str(extra.get("room_id", "")).strip()
+            self._handle_game_join(source_socket, sender_name, room_id)
+            return
+
+        if msg_type == "game_move":
+            room_id = str(extra.get("room_id", "")).strip()
+            row = int(extra.get("row", -1))
+            col = int(extra.get("col", -1))
+            self._handle_game_move(source_socket, sender_name, room_id, row, col)
             return
 
         self._announce_join_if_needed(source_socket)
@@ -106,6 +134,15 @@ class ChatServer:
         if target == "all":
             message["sender"] = sender_name
             self.broadcast(message)
+            self._record_group_message(message)
+
+            if self._should_trigger_group_bot(message):
+                thread = threading.Thread(
+                    target=self._handle_group_bot_mention,
+                    args=(sender_name, message["content"]),
+                    daemon=True,
+                )
+                thread.start()
             return
 
         message["sender"] = sender_name
@@ -172,6 +209,7 @@ class ChatServer:
             client = self.clients.pop(client_socket, None)
             if client is not None:
                 self.name_to_socket.pop(client.name, None)
+                self.game_manager.remove_player(client.name)
 
         if client is None:
             return
@@ -239,6 +277,173 @@ class ChatServer:
             f"{client_name} joined the chat",
             extra={"user_list": self.get_online_users()},
         )
+
+    def _should_trigger_group_bot(self, message: dict[str, str]) -> bool:
+        """Return True when a public chat message mentions the bot."""
+
+        if message.get("type") != "chat":
+            return False
+
+        sender = str(message.get("sender", "")).strip().lower()
+        if not sender or sender == "bot":
+            return False
+
+        content = str(message.get("content", ""))
+        return bool(content.strip() and self.bot_mention_pattern.search(content))
+
+    def _record_group_message(self, message: dict[str, str]) -> None:
+        """Store a public message so bot prompts can use recent context."""
+
+        with self.lock:
+            self.chat_history.add_message(dict(message))
+
+    def _get_recent_group_messages(self) -> list[dict[str, object]]:
+        """Return a small snapshot of recent group messages."""
+
+        with self.lock:
+            messages = self.chat_history.get_messages()
+
+        if len(messages) <= self.history_limit:
+            return messages
+
+        return messages[-self.history_limit :]
+
+    def _format_group_history(self, messages: list[dict[str, object]]) -> str:
+        """Turn recent messages into readable prompt context."""
+
+        lines: list[str] = []
+        for item in messages:
+            msg_type = str(item.get("type", ""))
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+
+            sender = str(item.get("sender", "")).strip() or "Unknown"
+            if msg_type == "chat":
+                lines.append(f"{sender}: {content}")
+            elif msg_type == "bot_response":
+                lines.append(f"Bot: {content}")
+
+        return "\n".join(lines)
+
+    def _build_group_bot_prompt(self, sender_name: str, current_message: str) -> str:
+        """Combine the current mention with recent group history."""
+
+        cleaned_message = self.bot_mention_pattern.sub("", current_message or "", count=1).strip()
+        recent_history = self._format_group_history(self._get_recent_group_messages())
+
+        prompt_lines = [f"@bot {cleaned_message or 'Please respond to the group.'}"]
+        if recent_history:
+            prompt_lines.append("")
+            prompt_lines.append("Recent group chat history:")
+            prompt_lines.append(recent_history)
+
+        return "\n".join(prompt_lines)
+
+    def _handle_group_bot_mention(self, sender_name: str, current_message: str) -> None:
+        """Generate and broadcast one bot response for a group mention."""
+
+        prompt_text = self._build_group_bot_prompt(sender_name, current_message)
+        try:
+            response_text = self.chatbot_manager.chat(sender_name, prompt_text)
+        except Exception as error:
+            response_text = f"Sorry, the bot had a problem: {error}"
+
+        bot_message = create_message("bot_response", "Bot", response_text)
+        self.broadcast(bot_message)
+        self._record_group_message(bot_message)
+
+    def _handle_game_create(self, creator_socket: socket.socket, creator_name: str) -> None:
+        """Create a new game room and send the room ID to the creator."""
+
+        room_id = self.game_manager.create_room(creator_name, creator_socket)
+        if not room_id:
+            error_message = create_message(
+                "error",
+                "Server",
+                "You are already in a game.",
+                target=creator_name,
+            )
+            self._safe_send_bytes(creator_socket, encode_message(error_message))
+            return
+
+        create_message_obj = create_message(
+            "game_create",
+            "Server",
+            f"Room created: {room_id}",
+            target=creator_name,
+            extra={"room_id": room_id},
+        )
+        self._safe_send_bytes(creator_socket, encode_message(create_message_obj))
+
+    def _handle_game_join(self, joiner_socket: socket.socket, joiner_name: str, room_id: str) -> None:
+        """Join an existing game room and send game_start to both players if room is now full."""
+
+        success, result = self.game_manager.join_room(room_id, joiner_name, joiner_socket)
+        if not success:
+            error_message = create_message(
+                "error",
+                "Server",
+                result,
+                target=joiner_name,
+            )
+            self._safe_send_bytes(joiner_socket, encode_message(error_message))
+            return
+
+        room = self.game_manager.get_room(room_id)
+        if room is None:
+            return
+
+        game_start_message = create_message(
+            "game_start",
+            "Server",
+            f"Game started: {room.x_player_name}(X) vs {room.o_player_name}(O)",
+            extra={
+                "room_id": room_id,
+                "x_player": room.x_player_name,
+                "o_player": room.o_player_name,
+            },
+        )
+
+        self._safe_send_bytes(room.x_socket, encode_message(game_start_message))
+        self._safe_send_bytes(room.o_socket, encode_message(game_start_message))
+
+    def _handle_game_move(
+        self, player_socket: socket.socket, player_name: str, room_id: str, row: int, col: int
+    ) -> None:
+        """Handle a player's move and broadcast the updated game state to both players."""
+
+        success, result = self.game_manager.handle_move(room_id, player_name, row, col)
+        if not success:
+            error_message = create_message("error", "Server", result.get("error", "Move failed"), target=player_name)
+            self._safe_send_bytes(player_socket, encode_message(error_message))
+            return
+
+        # Get the room to send state to both players
+        room = self.game_manager.get_room(room_id)
+        if not room or not room.game:
+            return
+
+        # Build game_state message with full board information
+        game_state_message = create_message(
+            "game_state",
+            "Server",
+            f"Game state updated",
+            extra={
+                "room_id": room_id,
+                "board": result["board"],
+                "current_player": result["current_player"],
+                "winner": result["winner"],
+                "is_draw": result["is_draw"],
+                "is_game_over": result["is_game_over"],
+                "x_player": room.x_player_name,
+                "o_player": room.o_player_name,
+            },
+        )
+
+        # Broadcast to both players
+        self._safe_send_bytes(room.x_socket, encode_message(game_state_message))
+        self._safe_send_bytes(room.o_socket, encode_message(game_state_message))
 
     def _normalize_name(self, requested_name: str, client_socket: socket.socket) -> str:
         """Use a readable fallback name when the sender field is empty."""

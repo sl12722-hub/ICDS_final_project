@@ -10,7 +10,7 @@ from chatbot.chatbot_client import ChatBotClient
 class ChatbotManager:
     """Store chatbot context, personality, and prompt-building rules."""
 
-    BOT_PREFIX = "/bot:"
+    BOT_PREFIX = "@bot"
     PERSONALITY_PREFIX = "/personality"
     DEFAULT_PERSONALITY = "friendly"
     MAX_EXCHANGES = 6
@@ -65,7 +65,7 @@ class ChatbotManager:
         return text.strip().lower().startswith(self.PERSONALITY_PREFIX)
 
     def extract_prompt(self, text: str) -> str:
-        """Return the text after the /bot: prefix."""
+        """Return the text after the chatbot prefix."""
 
         stripped_text = text.strip()
         return stripped_text[len(self.BOT_PREFIX) :].strip()
@@ -151,7 +151,7 @@ class ChatbotManager:
         return self.user_histories[normalized_user]
 
     def chat(self, user_key: str | None, text: str) -> str:
-        """Process a /bot: command, using recent context for one user."""
+        """Process an @bot command, using recent context for one user."""
 
         prompt = self.extract_prompt(text)
         if not prompt:
