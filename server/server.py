@@ -292,10 +292,30 @@ class ChatServer:
         return bool(content.strip() and self.bot_mention_pattern.search(content))
 
     def _record_group_message(self, message: dict[str, str]) -> None:
-        """Store a public message so bot prompts can use recent context."""
+        """Store a public message so bot prompts can use recent context.
+        
+        Only saves "chat" and "bot_response" messages. Game-related messages
+        (game_move, game_state, etc.) are not saved to avoid cluttering history.
+        """
 
+        msg_type = str(message.get("type", "")).strip()
+        
+        # Only save chat and bot response messages to history
+        if msg_type not in ("chat", "bot_response"):
+            return
+        
+        # Extract key fields and add to history with timestamp
+        sender = str(message.get("sender", "")).strip()
+        content = str(message.get("content", "")).strip()
+        timestamp = str(message.get("timestamp", "")).strip()
+        
         with self.lock:
-            self.chat_history.add_message(dict(message))
+            self.chat_history.add_message(
+                sender=sender,
+                content=content,
+                msg_type=msg_type,
+                timestamp=timestamp,
+            )
 
     def _get_recent_group_messages(self) -> list[dict[str, object]]:
         """Return a small snapshot of recent group messages."""
