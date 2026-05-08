@@ -9,6 +9,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
 
+from bonus.sentiment import analyze_sentiment
 from chatbot.chatbot_manager import ChatbotManager
 from server.protocol import ProtocolError, create_message, decode_message, encode_message
 
@@ -216,7 +217,11 @@ class GUIChatClient:
         """Format protocol messages for the chat window."""
 
         if message["type"] == "chat":
-            return f"{message['sender']}: {message['content']}\n"
+            content = str(message.get("content", ""))
+            if not content.strip():
+                return f"{message['sender']}: {content}\n"
+            sentiment_label = analyze_sentiment(content)
+            return f"{message['sender']}: {content} [{sentiment_label}]\n"
 
         if message["type"] == "bot_response":
             return f"Bot: {message['content']}\n"
