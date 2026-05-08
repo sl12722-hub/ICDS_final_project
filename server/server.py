@@ -9,6 +9,7 @@ import threading
 from dataclasses import dataclass
 
 from chatbot.chatbot_manager import ChatbotManager
+from bonus.summary_keywords import extract_keywords, summarize_chat
 from server.chat_history import ChatHistory
 from server.game_manager import GameManager
 from server.protocol import MESSAGE_TYPES, ProtocolError, create_message, decode_message, encode_message
@@ -92,6 +93,8 @@ class ChatServer:
 
         msg_type = message["type"]
         extra = message["extra"]
+        content = str(message.get("content", ""))
+        normalized_content = content.strip().lower()
 
         if msg_type not in MESSAGE_TYPES:
             self.send_error(f"Unknown message type: {msg_type}", source_socket)
@@ -105,6 +108,20 @@ class ChatServer:
             return
 
         if msg_type in {"game_state", "game_end"}:
+            return
+
+        if self._is_summary_request(msg_type, normalized_content):
+            sender_name = self._normalize_name(message["sender"], source_socket)
+            self._update_client_name(source_socket, sender_name)
+            self._announce_join_if_needed(source_socket)
+            self._handle_summary_request()
+            return
+
+        if self._is_keywords_request(msg_type, normalized_content):
+            sender_name = self._normalize_name(message["sender"], source_socket)
+            self._update_client_name(source_socket, sender_name)
+            self._announce_join_if_needed(source_socket)
+            self._handle_keywords_request()
             return
 
         sender_name = self._normalize_name(message["sender"], source_socket)
@@ -317,6 +334,39 @@ class ChatServer:
                 timestamp=timestamp,
             )
 
+    def _is_summary_request(self, msg_type: str, normalized_content: str) -> bool:
+        """Return True when an incoming message asks for a chat summary."""
+
+        return msg_type == "summary_request" or (msg_type == "chat" and normalized_content == "/summary")
+
+    def _is_keywords_request(self, msg_type: str, normalized_content: str) -> bool:
+        """Return True when an incoming message asks for keywords."""
+
+        return msg_type == "keywords_request" or (msg_type == "chat" and normalized_content == "/keywords")
+
+    def _handle_summary_request(self) -> None:
+        """Analyze recent chat and broadcast a short system summary."""
+
+        with self.lock:
+            history_text = self.chat_history.get_recent_text(self.history_limit)
+
+        summary_text = summarize_chat(history_text)
+        self.send_system_message(f"Summary: {summary_text}")
+
+    def _handle_keywords_request(self) -> None:
+        """Analyze recent chat and broadcast a keyword list."""
+
+        with self.lock:
+            history_text = self.chat_history.get_recent_text(self.history_limit)
+
+        keywords = extract_keywords(history_text)
+        if keywords:
+            content = f"Keywords: {', '.join(keywords)}"
+        else:
+            content = "Keywords: No recent chat history to analyze."
+
+        self.send_system_message(content)
+
     def _get_recent_group_messages(self) -> list[dict[str, object]]:
         """Return a small snapshot of recent group messages."""
 
@@ -466,7 +516,7 @@ class ChatServer:
         self._safe_send_bytes(room.o_socket, encode_message(game_state_message))
 
     def _normalize_name(self, requested_name: str, client_socket: socket.socket) -> str:
-        """Use a readable fallback name when the sender field is empty."""
+        """Use a readable guest name when the sender field is empty."""
 
         cleaned_name = requested_name.strip()
         if cleaned_name:
