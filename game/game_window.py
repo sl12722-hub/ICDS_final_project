@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import tkinter as tk
 import threading
 
 from game.tic_tac_toe import TicTacToe
 from server.protocol import create_message, encode_message
+
+LOGGER = logging.getLogger(__name__)
 
 
 class GameWindow:
@@ -114,8 +117,8 @@ class GameWindow:
                 extra={"room_id": self.room_id, "row": row, "col": col},
             )
             self.socket.sendall(encode_message(msg))
-        except Exception as e:
-            self.result_var.set(f"Error sending move: {e}")
+        except OSError:
+            self.result_var.set("Could not send move to the server.")
 
     def _start_message_listener(self) -> None:
         """Start a background thread to listen for server messages."""
@@ -137,8 +140,8 @@ class GameWindow:
                     self.handle_server_message(message)
                 except json.JSONDecodeError:
                     pass
-        except Exception as e:
-            print(f"Message listener error: {e}")
+        except OSError as error:
+            LOGGER.warning("Game window lost server connection: %s", error)
 
     def handle_server_message(self, message: dict) -> None:
         """Dispatch one game-related message to this game window."""

@@ -70,11 +70,11 @@ class GameManager:
                 return False, "You are already in a game."
 
             if room_id not in self.rooms:
-                return False, f"Room {room_id} not found."
+                return False, "Game room not found."
 
             room = self.rooms[room_id]
             if room.is_full():
-                return False, "Room is full."
+                return False, "Game room is full."
 
             room.o_player_name = player_name
             room.o_socket = player_socket
@@ -111,11 +111,11 @@ class GameManager:
 
         with self.lock:
             if room_id not in self.rooms:
-                return False, {"error": "Room not found"}
+                return False, {"error": "Game room not found."}
 
             room = self.rooms[room_id]
             if not room.game:
-                return False, {"error": "Game not started"}
+                return False, {"error": "Game has not started yet."}
 
             # Determine player symbol
             if player_name == room.x_player_name:
@@ -123,15 +123,15 @@ class GameManager:
             elif player_name == room.o_player_name:
                 expected_player = "O"
             else:
-                return False, {"error": "Player not in this room"}
+                return False, {"error": "You are not part of this game room."}
 
             # Check if it's this player's turn
             if room.game.current_player != expected_player:
-                return False, {"error": f"It is {room.game.current_player}'s turn"}
+                return False, {"error": "Invalid move. It is not your turn."}
 
             # Validate and make the move
             if not room.game.make_move(row, col):
-                return False, {"error": "Invalid move (cell occupied or out of bounds)"}
+                return False, {"error": "Invalid move. Choose an empty cell inside the board."}
 
             # Return the updated game state
             game_state = {

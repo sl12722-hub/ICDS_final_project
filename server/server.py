@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 import socket
 import threading
@@ -18,6 +19,8 @@ from chatbot.chatbot_manager import ChatbotManager
 from server.chat_history import ChatHistory
 from server.game_manager import GameManager
 from server.protocol import MESSAGE_TYPES, ProtocolError, create_message, decode_message, encode_message
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,13 +55,20 @@ class ChatServer:
     def start(self) -> None:
         """Bind the server socket and accept clients forever."""
 
+        if not logging.getLogger().handlers:
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            )
+
         self.server_socket.bind((self.host, self.port))
         self.server_socket.listen()
-        print(f"Server listening on {self.host}:{self.port}")
+        LOGGER.info("Server listening on %s:%s", self.host, self.port)
 
         try:
             while True:
                 client_socket, address = self.server_socket.accept()
+                LOGGER.info("Client connected: %s:%s", address[0], address[1])
                 thread = threading.Thread(
                     target=self.handle_client,
                     args=(client_socket, address),
@@ -66,7 +76,7 @@ class ChatServer:
                 )
                 thread.start()
         except KeyboardInterrupt:
-            print("\nServer shutting down.")
+            LOGGER.info("Server shutting down.")
         finally:
             self.shutdown()
 
@@ -85,11 +95,13 @@ class ChatServer:
                 try:
                     message = decode_message(raw_line)
                 except ProtocolError as error:
+                    LOGGER.warning("Protocol error from %s:%s: %s", address[0], address[1], error)
                     self.send_error(str(error), client_socket)
                     continue
 
                 self.route_message(client_socket, message)
         except (ConnectionResetError, OSError):
+            LOGGER.info("Client connection lost: %s:%s", address[0], address[1])
             pass
         finally:
             self.remove_client(client_socket)
@@ -118,6 +130,13 @@ class ChatServer:
 
         sender_name = self._normalize_name(message["sender"], source_socket)
         self._update_client_name(source_socket, sender_name)
+        LOGGER.info(
+            "Message received: type=%s sender=%s target=%s content=%s",
+            msg_type,
+            sender_name,
+            message["target"],
+            self._loggable_content(content, extra),
+        )
         if extra.get("event") == "login":
             self._announce_join_if_needed(source_socket)
             return
@@ -243,6 +262,7 @@ class ChatServer:
         except OSError:
             pass
 
+        LOGGER.info("Client disconnected: %s", client.name)
         if client.has_announced_join:
             self.send_system_message(
                 f"{client.name} left the chat",
@@ -396,7 +416,14 @@ class ChatServer:
         try:
             response_text = self.chatbot_manager.chat(sender_name, prompt_text)
         except Exception as error:
-            response_text = f"Sorry, the bot had a problem: {error}"
+            LOGGER.exception("Chatbot error while handling mention from %s", sender_name)
+            system_message = create_message(
+                "system",
+                "System",
+                "Bot is temporarily unavailable.",
+            )
+            self.broadcast(system_message)
+            return
 
         bot_message = create_message("bot_response", "Bot", response_text)
         self.broadcast(bot_message)
@@ -439,6 +466,7 @@ class ChatServer:
 
         room_id = self.game_manager.create_room(creator_name, creator_socket)
         if not room_id:
+            LOGGER.warning("Game room creation rejected for %s: already in a game", creator_name)
             error_message = create_message(
                 "error",
                 "Server",
@@ -448,6 +476,7 @@ class ChatServer:
             self._safe_send_bytes(creator_socket, encode_message(error_message))
             return
 
+        LOGGER.info("Game room created: room=%s creator=%s", room_id, creator_name)
         create_message_obj = create_message(
             "game_create",
             "Server",
@@ -462,6 +491,12 @@ class ChatServer:
 
         success, result = self.game_manager.join_room(room_id, joiner_name, joiner_socket)
         if not success:
+            LOGGER.warning(
+                "Game join rejected: room=%s player=%s reason=%s",
+                room_id,
+                joiner_name,
+                result,
+            )
             error_message = create_message(
                 "error",
                 "Server",
@@ -475,6 +510,7 @@ class ChatServer:
         if room is None:
             return
 
+        LOGGER.info("Game joined: room=%s player=%s", room_id, joiner_name)
         game_start_message = create_message(
             "game_start",
             "Server",
@@ -496,6 +532,14 @@ class ChatServer:
 
         success, result = self.game_manager.handle_move(room_id, player_name, row, col)
         if not success:
+            LOGGER.warning(
+                "Invalid game move: room=%s player=%s row=%s col=%s reason=%s",
+                room_id,
+                player_name,
+                row,
+                col,
+                result.get("error", "Move failed"),
+            )
             error_message = create_message("error", "Server", result.get("error", "Move failed"), target=player_name)
             self._safe_send_bytes(player_socket, encode_message(error_message))
             return
@@ -505,6 +549,13 @@ class ChatServer:
         if not room or not room.game:
             return
 
+        LOGGER.info(
+            "Game move accepted: room=%s player=%s row=%s col=%s",
+            room_id,
+            player_name,
+            row,
+            col,
+        )
         # Build game_state message with full board information
         game_state_message = create_message(
             "game_state",
@@ -546,7 +597,8 @@ class ChatServer:
 
         try:
             target_socket.sendall(payload)
-        except OSError:
+        except OSError as error:
+            LOGGER.warning("Socket send failed: %s", error)
             self.remove_client(target_socket)
 
     def _socket_name(self, client_socket: socket.socket) -> str:
@@ -559,6 +611,19 @@ class ChatServer:
             return "unknown"
 
         return client.name
+
+    def _loggable_content(self, content: str, extra: dict[str, object]) -> str:
+        """Return a short printable representation of message content."""
+
+        if extra.get("event") == "login":
+            return "<login>"
+
+        cleaned = content.strip().replace("\n", "\\n")
+        if not cleaned:
+            return "<empty>"
+        if len(cleaned) > 80:
+            return cleaned[:77] + "..."
+        return cleaned
 
 
 def parse_args() -> argparse.Namespace:

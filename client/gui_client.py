@@ -8,7 +8,7 @@ import socket
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, scrolledtext
+from tkinter import scrolledtext
 
 from bonus.ai_picture import show_image_preview, try_aipic_reply
 from bonus.sentiment import analyze_sentiment
@@ -151,16 +151,16 @@ class GUIChatClient:
             host = self.host_var.get().strip()
             port = int(self.port_var.get().strip())
         except ValueError:
-            messagebox.showerror("Invalid port", "Port must be a whole number.")
+            self.show_local_system_message("Port must be a whole number.")
             return
 
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((host, port))
-        except OSError as error:
+        except OSError:
             self.client_socket = None
             self.status_var.set("Status: Connection failed")
-            messagebox.showerror("Connection failed", str(error))
+            self.show_local_system_message("Could not connect to server.")
             return
 
         self.connection_id += 1
@@ -181,9 +181,9 @@ class GUIChatClient:
         self.sync_personality_selection(username)
         try:
             self.send_login_message(username)
-        except OSError as error:
+        except OSError:
             self.status_var.set("Status: Disconnected")
-            messagebox.showerror("Login failed", str(error))
+            self.show_local_system_message("Could not complete login with the server.")
             self.handle_disconnect()
             return
 
@@ -203,8 +203,8 @@ class GUIChatClient:
             for raw_line in client_file:
                 try:
                     message = decode_message(raw_line)
-                except ProtocolError as error:
-                    self.ui_queue.put((connection_id, "text", f"[protocol error] {error}\n"))
+                except ProtocolError:
+                    self.ui_queue.put((connection_id, "text", "System: Received an invalid message from the server.\n"))
                     continue
 
                 # Each received message becomes one queue item and is discarded
@@ -212,7 +212,7 @@ class GUIChatClient:
                 self.ui_queue.put((connection_id, "message", message))
         except (ConnectionResetError, OSError):
             if not self.disconnect_requested:
-                self.ui_queue.put((connection_id, "text", "Connection to server was lost.\n"))
+                self.ui_queue.put((connection_id, "text", "System: Server disconnected. Please reconnect.\n"))
         finally:
             try:
                 client_file.close()
@@ -262,9 +262,9 @@ class GUIChatClient:
             self.client_socket.sendall(encode_message(message))
             self.message_var.set("")
             self.message_entry.focus_set()
-        except OSError as error:
+        except OSError:
             self.status_var.set("Status: Disconnected")
-            messagebox.showerror("Send failed", str(error))
+            self.show_local_system_message("Could not send the message because the server connection was lost.")
             self.handle_disconnect()
 
     def send_analysis_request(self, message_type: str, label: str) -> None:
@@ -282,9 +282,11 @@ class GUIChatClient:
             self.client_socket.sendall(encode_message(message))
             self.message_var.set("")
             self.message_entry.focus_set()
-        except OSError as error:
+        except OSError:
             self.status_var.set("Status: Disconnected")
-            messagebox.showerror(f"{label.title()} request failed", str(error))
+            self.show_local_system_message(
+                f"Could not request {label} because the server is unavailable."
+            )
             self.handle_disconnect()
 
     def format_message(self, message: dict[str, object]) -> str:
@@ -304,7 +306,7 @@ class GUIChatClient:
             return f"System: {message['content']}\n"
 
         if message["type"] == "error":
-            return f"Error: {message['content']}\n"
+            return f"System: {self.friendly_server_error_message(str(message['content']))}\n"
 
         if message["type"] == "summary_response":
             return f"Summary: {message['content']}\n"
@@ -367,9 +369,9 @@ class GUIChatClient:
             message = create_message("game_create", username, "create room")
             self.client_socket.sendall(encode_message(message))
             self.game_status_var.set("Game: Creating room...")
-        except OSError as error:
+        except OSError:
             self.status_var.set("Status: Disconnected")
-            messagebox.showerror("Create game failed", str(error))
+            self.show_local_system_message("Could not create a game room because the server is unavailable.")
             self.handle_disconnect()
 
     def join_game_room(self) -> None:
@@ -392,9 +394,9 @@ class GUIChatClient:
             )
             self.client_socket.sendall(encode_message(message))
             self.game_status_var.set(f"Game: Joining room {room_id}...")
-        except OSError as error:
+        except OSError:
             self.status_var.set("Status: Disconnected")
-            messagebox.showerror("Join game failed", str(error))
+            self.show_local_system_message("Could not join the game room because the server is unavailable.")
             self.handle_disconnect()
 
     def process_ui_queue(self) -> None:
@@ -461,6 +463,27 @@ class GUIChatClient:
 
         system_message = create_message("system", "System", text)
         self.add_text(self.format_message(system_message))
+
+    @staticmethod
+    def friendly_server_error_message(text: str) -> str:
+        """Map raw server-side error strings to user-friendly GUI text."""
+
+        lowered = text.strip().lower()
+        if not lowered:
+            return "Something went wrong."
+        if "game room not found" in lowered or ("room" in lowered and "not found" in lowered):
+            return "Game room not found."
+        if "room is full" in lowered:
+            return "Game room is full."
+        if "not your turn" in lowered:
+            return "Invalid move. It is not your turn."
+        if "invalid move" in lowered:
+            return "Invalid move. Choose an empty cell."
+        if "bot is temporarily unavailable" in lowered:
+            return "Bot is temporarily unavailable."
+        if "target user" in lowered and "not connected" in lowered:
+            return "That user is not connected."
+        return text.strip()
 
     def send_login_message(self, username: str) -> None:
         """Tell the server which display name this client will use."""
@@ -540,7 +563,7 @@ class GUIChatClient:
                     self.add_text("System: Game result - Draw\n")
 
         elif msg_type == "error":
-            text = str(message.get("content", ""))
+            text = self.friendly_server_error_message(str(message.get("content", "")))
             if "game" in text.lower() or "room" in text.lower() or "turn" in text.lower() or "move" in text.lower():
                 self.game_status_var.set(f"Game: {text}")
 
@@ -604,8 +627,8 @@ class GUIChatClient:
 
         try:
             response_text = self.chatbot_manager.chat(user_key, command_text)
-        except Exception as error:
-            response_text = f"Sorry, the bot had a problem: {error}"
+        except Exception:
+            response_text = "Bot is temporarily unavailable."
 
         self.ui_queue.put((self.connection_id, "bot_response", response_text))
 
