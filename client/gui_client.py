@@ -11,6 +11,7 @@ from pathlib import Path
 from tkinter import messagebox, scrolledtext
 
 from bonus.ai_picture import show_image_preview, try_aipic_reply
+from bonus.sentiment import analyze_sentiment
 from chatbot.chatbot_manager import ChatbotManager
 from game.game_window import GameWindow
 from server.protocol import ProtocolError, create_message, decode_message, encode_message
