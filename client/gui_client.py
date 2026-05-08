@@ -259,7 +259,11 @@ class GUIChatClient:
         """Format protocol messages for the chat window."""
 
         if message["type"] == "chat":
-            return f"{message['sender']}: {message['content']}\n"
+            content = str(message.get("content", ""))
+            if not content.strip():
+                return f"{message['sender']}: {content}\n"
+            sentiment_label = analyze_sentiment(content)
+            return f"{message['sender']}: {content} [{sentiment_label}]\n"
 
         if message["type"] == "bot_response":
             return f"Bot: {message['content']}\n"
