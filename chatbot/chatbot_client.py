@@ -18,6 +18,26 @@ from shared.ai_config import (
 )
 
 
+class ChatBotError(RuntimeError):
+    """Base exception for chatbot request failures."""
+
+
+class ChatBotConfigurationError(ChatBotError):
+    """Raised when chatbot credentials are missing."""
+
+
+class ChatBotAuthenticationError(ChatBotError):
+    """Raised when the model service rejects authentication."""
+
+
+class ChatBotConnectionError(ChatBotError):
+    """Raised when the model service cannot be reached reliably."""
+
+
+class ChatBotResponseError(ChatBotError):
+    """Raised when the model service returns unusable data."""
+
+
 class ChatBotClient:
     """Small chatbot client for an OpenAI-compatible model endpoint."""
 
@@ -47,8 +67,11 @@ class ChatBotClient:
     def _ensure_runtime_config(self) -> None:
         """Load API configuration only when the chatbot is actually used."""
 
-        if self.api_key is None:
-            self.api_key = get_openai_api_key()
+        try:
+            if self.api_key is None:
+                self.api_key = get_openai_api_key()
+        except RuntimeError as error:
+            raise ChatBotConfigurationError(str(error)) from error
         if self.base_url is None:
             self.base_url = get_openai_base_url()
         if self.model is None:
@@ -98,15 +121,25 @@ class ChatBotClient:
                 response_data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Chatbot API returned HTTP {error.code}: {detail}") from error
+            if error.code in {401, 403}:
+                raise ChatBotAuthenticationError(
+                    f"Chatbot API returned HTTP {error.code}: {detail}"
+                ) from error
+            raise ChatBotConnectionError(
+                f"Chatbot API returned HTTP {error.code}: {detail}"
+            ) from error
         except urllib.error.URLError as error:
-            raise RuntimeError(f"Could not reach chatbot API: {error.reason}") from error
+            raise ChatBotConnectionError(
+                f"Could not reach chatbot API: {error.reason}"
+            ) from error
         except TimeoutError as error:
-            raise RuntimeError("Chatbot API request timed out.") from error
+            raise ChatBotConnectionError("Chatbot API request timed out.") from error
         except json.JSONDecodeError as error:
-            raise RuntimeError("Chatbot API returned invalid JSON.") from error
+            raise ChatBotResponseError("Chatbot API returned invalid JSON.") from error
 
         try:
             return response_data["choices"][0]["message"]["content"].strip()
         except (KeyError, IndexError, TypeError) as error:
-            raise RuntimeError("Chatbot API response format was unexpected.") from error
+            raise ChatBotResponseError(
+                "Chatbot API response format was unexpected."
+            ) from error

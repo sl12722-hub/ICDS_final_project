@@ -30,7 +30,6 @@ class GUIChatClient:
 
         self.client_socket: socket.socket | None = None
         self.receiver_thread: threading.Thread | None = None
-        self.bot_thread: threading.Thread | None = None
         self.window_closed = False
         self.ui_queue: queue.Queue[tuple[int, str, object | None]] = queue.Queue()
         self.queue_job_id: str | None = None
@@ -303,7 +302,7 @@ class GUIChatClient:
             return f"Bot: {message['content']}\n"
 
         if message["type"] == "system":
-            return f"System: {message['content']}\n"
+            return f"System: {self.friendly_server_error_message(str(message['content']))}\n"
 
         if message["type"] == "error":
             return f"System: {self.friendly_server_error_message(str(message['content']))}\n"
@@ -414,9 +413,6 @@ class GUIChatClient:
                     self.add_text(payload)
                 elif action == "message" and isinstance(payload, dict):
                     self.handle_server_message(payload)
-                elif action == "bot_response" and isinstance(payload, str):
-                    bot_message = create_message("bot_response", "Bot", payload)
-                    self.add_text(self.format_message(bot_message))
                 elif action == "disconnect":
                     self.handle_disconnect()
         except queue.Empty:
@@ -479,6 +475,16 @@ class GUIChatClient:
             return "Invalid move. It is not your turn."
         if "invalid move" in lowered:
             return "Invalid move. Choose an empty cell."
+        if "bot is not configured on the server" in lowered:
+            return "Bot is not configured on the server."
+        if "bot service authentication failed" in lowered:
+            return "Bot service authentication failed."
+        if "bot service is unreachable right now" in lowered:
+            return "Bot service is unreachable right now."
+        if "bot service returned an invalid response" in lowered:
+            return "Bot service returned an invalid response."
+        if "bot failed unexpectedly. check server logs." in lowered:
+            return "Bot failed unexpectedly. Check server logs."
         if "bot is temporarily unavailable" in lowered:
             return "Bot is temporarily unavailable."
         if "target user" in lowered and "not connected" in lowered:
@@ -608,29 +614,6 @@ class GUIChatClient:
         self.user_listbox.delete(0, "end")
         for username in user_list:
             self.user_listbox.insert("end", username)
-
-    def start_bot_request(self, command_text: str) -> None:
-        """Launch chatbot work in a background thread so the GUI stays responsive."""
-
-        user_key = self.get_chatbot_user_key()
-        self.sync_personality_selection(user_key)
-        self.add_text(f"{self.username_var.get().strip()}: {command_text}\n")
-        self.bot_thread = threading.Thread(
-            target=self.fetch_bot_response,
-            args=(user_key, command_text),
-            daemon=True,
-        )
-        self.bot_thread.start()
-
-    def fetch_bot_response(self, user_key: str, command_text: str) -> None:
-        """Call the chatbot manager and queue the result for the GUI thread."""
-
-        try:
-            response_text = self.chatbot_manager.chat(user_key, command_text)
-        except Exception:
-            response_text = "Bot is temporarily unavailable."
-
-        self.ui_queue.put((self.connection_id, "bot_response", response_text))
 
     def handle_personality_command(self, command_text: str) -> None:
         """Apply a personality command and show the result locally."""
