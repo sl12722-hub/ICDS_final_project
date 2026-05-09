@@ -2,12 +2,9 @@
 
 ## Team Members
 
-Fill in your final team list here before submission.
-
-- `[Member 1 Name]` - `[Role / contribution summary]`
-- `[Member 2 Name]` - `[Role / contribution summary]`
-- `[Member 3 Name]` - `[Role / contribution summary]`
-- `[Member 4 Name]` - `[Role / contribution summary]`
+- `Sitong Li` - Led overall project architecture and backend integration, including the threaded server structure, shared JSON message protocol, chat history flow, AI configuration support, and final README/setup organization.
+- `Yunzhi Li` - Led client-facing feature development, including the Tkinter GUI client, chatbot interaction and personality controls, multiplayer Tic-Tac-Toe integration, and end-to-end feature wiring and refinement.
+- `Runzhang Zhu` - Contributed supporting feature modules and quality improvements, including summary and keyword extraction, sentiment-related functionality, error-handling polish, and test support for project stability.
 
 ## Project Overview
 
