@@ -6,8 +6,9 @@ import os
 import unittest
 from unittest.mock import patch
 
-from chatbot.chatbot_client import ChatBotClient
+from chatbot.chatbot_client import ChatBotClient, ChatBotConfigurationError
 from chatbot.chatbot_manager import ChatbotManager
+from shared.ai_config import inspect_openai_config
 
 
 class ChatbotClientLazyConfigTests(unittest.TestCase):
@@ -29,7 +30,7 @@ class ChatbotClientLazyConfigTests(unittest.TestCase):
     def test_real_prompt_requires_openai_api_key_only_when_used(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             client = ChatBotClient()
-            with self.assertRaisesRegex(RuntimeError, "OPENAI_API_KEY is not set"):
+            with self.assertRaisesRegex(ChatBotConfigurationError, "OPENAI_API_KEY is not set"):
                 client.chat("@bot hello")
 
     def test_chatbot_manager_can_initialize_without_openai_env(self) -> None:
@@ -37,6 +38,32 @@ class ChatbotClientLazyConfigTests(unittest.TestCase):
             manager = ChatbotManager()
 
         self.assertIsInstance(manager.client, ChatBotClient)
+
+    def test_inspect_openai_config_reports_unconfigured_without_raising(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            status = inspect_openai_config()
+
+        self.assertFalse(status.is_configured)
+        self.assertFalse(status.has_api_key)
+        self.assertEqual(status.base_url, "https://yinli.one/v1")
+        self.assertEqual(status.model, "claude-sonnet-4-6")
+
+    def test_inspect_openai_config_reports_resolved_values(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "test-key",
+                "OPENAI_BASE_URL": "https://example.com/custom",
+                "OPENAI_MODEL": "demo-model",
+            },
+            clear=True,
+        ):
+            status = inspect_openai_config()
+
+        self.assertTrue(status.is_configured)
+        self.assertTrue(status.has_api_key)
+        self.assertEqual(status.base_url, "https://example.com/custom/v1")
+        self.assertEqual(status.model, "demo-model")
 
 
 if __name__ == "__main__":

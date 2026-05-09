@@ -15,12 +15,25 @@ from bonus.summary_keywords import (
     extract_keywords,
     generate_summary,
 )
+from chatbot.chatbot_client import (
+    ChatBotAuthenticationError,
+    ChatBotConfigurationError,
+    ChatBotConnectionError,
+    ChatBotResponseError,
+)
 from chatbot.chatbot_manager import ChatbotManager
 from server.chat_history import ChatHistory
 from server.game_manager import GameManager
 from server.protocol import MESSAGE_TYPES, ProtocolError, create_message, decode_message, encode_message
+from shared.ai_config import inspect_openai_config
 
 LOGGER = logging.getLogger(__name__)
+
+BOT_NOT_CONFIGURED_MESSAGE = "Bot is not configured on the server."
+BOT_AUTH_FAILED_MESSAGE = "Bot service authentication failed."
+BOT_UNREACHABLE_MESSAGE = "Bot service is unreachable right now."
+BOT_INVALID_RESPONSE_MESSAGE = "Bot service returned an invalid response."
+BOT_UNEXPECTED_FAILURE_MESSAGE = "Bot failed unexpectedly. Check server logs."
 
 
 @dataclass
@@ -50,6 +63,7 @@ class ChatServer:
         self.history_limit = 12
         self.summary_history_limit = 30
         self.bot_mention_pattern = re.compile(r"(?i)(?<!\w)@bot\b")
+        self.ai_config_status = inspect_openai_config()
         self.lock = threading.Lock()
 
     def start(self) -> None:
@@ -64,10 +78,14 @@ class ChatServer:
         self.server_socket.bind((self.host, self.port))
         self.server_socket.listen()
         LOGGER.info("Server listening on %s:%s", self.host, self.port)
+        self._log_bot_startup_status()
 
         try:
             while True:
-                client_socket, address = self.server_socket.accept()
+                try:
+                    client_socket, address = self.server_socket.accept()
+                except OSError:
+                    break
                 LOGGER.info("Client connected: %s:%s", address[0], address[1])
                 thread = threading.Thread(
                     target=self.handle_client,
@@ -416,11 +434,21 @@ class ChatServer:
         try:
             response_text = self.chatbot_manager.chat(sender_name, prompt_text)
         except Exception as error:
-            LOGGER.exception("Chatbot error while handling mention from %s", sender_name)
+            user_message, log_level = self._classify_bot_error(error)
+            LOGGER.log(
+                log_level,
+                "Chatbot error while handling mention from %s [base_url=%s model=%s configured=%s]: %s",
+                sender_name,
+                self.ai_config_status.base_url,
+                self.ai_config_status.model,
+                self.ai_config_status.is_configured,
+                error,
+                exc_info=True,
+            )
             system_message = create_message(
                 "system",
                 "System",
-                "Bot is temporarily unavailable.",
+                user_message,
             )
             self.broadcast(system_message)
             return
@@ -428,6 +456,38 @@ class ChatServer:
         bot_message = create_message("bot_response", "Bot", response_text)
         self.broadcast(bot_message)
         self._record_group_message(bot_message)
+
+    def _log_bot_startup_status(self) -> None:
+        """Log whether optional bot features are configured at server startup."""
+
+        self.ai_config_status = inspect_openai_config()
+        if self.ai_config_status.is_configured:
+            LOGGER.info(
+                "Bot AI features enabled [base_url=%s model=%s]",
+                self.ai_config_status.base_url,
+                self.ai_config_status.model,
+            )
+            return
+
+        LOGGER.warning(
+            "Bot AI features are not configured; chatbot commands will return '%s' [base_url=%s model=%s]",
+            BOT_NOT_CONFIGURED_MESSAGE,
+            self.ai_config_status.base_url,
+            self.ai_config_status.model,
+        )
+
+    def _classify_bot_error(self, error: Exception) -> tuple[str, int]:
+        """Map chatbot exceptions to stable user-facing messages and log levels."""
+
+        if isinstance(error, ChatBotConfigurationError):
+            return BOT_NOT_CONFIGURED_MESSAGE, logging.WARNING
+        if isinstance(error, ChatBotAuthenticationError):
+            return BOT_AUTH_FAILED_MESSAGE, logging.ERROR
+        if isinstance(error, ChatBotConnectionError):
+            return BOT_UNREACHABLE_MESSAGE, logging.ERROR
+        if isinstance(error, ChatBotResponseError):
+            return BOT_INVALID_RESPONSE_MESSAGE, logging.ERROR
+        return BOT_UNEXPECTED_FAILURE_MESSAGE, logging.ERROR
 
     def _handle_summary_request(self, requester_socket: socket.socket, requester_name: str) -> None:
         """Generate a private summary from recent public chat history."""

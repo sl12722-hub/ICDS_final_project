@@ -6,6 +6,12 @@ import socket
 import unittest
 from unittest.mock import patch
 
+from chatbot.chatbot_client import (
+    ChatBotAuthenticationError,
+    ChatBotConfigurationError,
+    ChatBotConnectionError,
+    ChatBotResponseError,
+)
 from client.gui_client import GUIChatClient
 from server.protocol import create_message, decode_message, encode_message
 from server.server import ChatServer, ClientConnection
@@ -120,7 +126,80 @@ class ErrorHandlingTests(unittest.TestCase):
         self.assertEqual(error_message["content"], "Invalid move. It is not your turn.")
         self.assertIn("Invalid game move", "\n".join(move_logs.output))
 
-    def test_chatbot_failure_logs_and_broadcasts_system_message(self) -> None:
+    def test_chatbot_missing_config_returns_friendly_system_message(self) -> None:
+        _alice_client, alice_file, _alice_server = self._add_client("Alice")
+        _bob_client, bob_file, _bob_server = self._add_client("Bob")
+
+        with patch.object(
+            self.server.chatbot_manager,
+            "chat",
+            side_effect=ChatBotConfigurationError("OPENAI_API_KEY is not set"),
+        ):
+            with self.assertLogs("server.server", level="WARNING") as logs:
+                self.server._handle_group_bot_mention("Alice", "@bot help")
+
+        alice_message = self._read_message(alice_file)
+        bob_message = self._read_message(bob_file)
+        self.assertEqual(alice_message["type"], "system")
+        self.assertEqual(alice_message["content"], "Bot is not configured on the server.")
+        self.assertEqual(bob_message["content"], "Bot is not configured on the server.")
+        self.assertIn("Chatbot error while handling mention from Alice", "\n".join(logs.output))
+
+    def test_chatbot_auth_failure_returns_friendly_system_message(self) -> None:
+        _alice_client, alice_file, _alice_server = self._add_client("Alice")
+        _bob_client, bob_file, _bob_server = self._add_client("Bob")
+
+        with patch.object(
+            self.server.chatbot_manager,
+            "chat",
+            side_effect=ChatBotAuthenticationError("Chatbot API returned HTTP 401"),
+        ):
+            with self.assertLogs("server.server", level="ERROR") as logs:
+                self.server._handle_group_bot_mention("Alice", "@bot help")
+
+        alice_message = self._read_message(alice_file)
+        bob_message = self._read_message(bob_file)
+        self.assertEqual(alice_message["content"], "Bot service authentication failed.")
+        self.assertEqual(bob_message["content"], "Bot service authentication failed.")
+        self.assertIn("configured=", "\n".join(logs.output))
+
+    def test_chatbot_network_failure_returns_friendly_system_message(self) -> None:
+        _alice_client, alice_file, _alice_server = self._add_client("Alice")
+        _bob_client, bob_file, _bob_server = self._add_client("Bob")
+
+        with patch.object(
+            self.server.chatbot_manager,
+            "chat",
+            side_effect=ChatBotConnectionError("Could not reach chatbot API: timed out"),
+        ):
+            with self.assertLogs("server.server", level="ERROR") as logs:
+                self.server._handle_group_bot_mention("Alice", "@bot help")
+
+        alice_message = self._read_message(alice_file)
+        bob_message = self._read_message(bob_file)
+        self.assertEqual(alice_message["content"], "Bot service is unreachable right now.")
+        self.assertEqual(bob_message["content"], "Bot service is unreachable right now.")
+        self.assertIn("Chatbot error while handling mention from Alice", "\n".join(logs.output))
+
+    def test_chatbot_invalid_response_returns_friendly_system_message(self) -> None:
+        _alice_client, alice_file, _alice_server = self._add_client("Alice")
+        _bob_client, bob_file, _bob_server = self._add_client("Bob")
+
+        with patch.object(
+            self.server.chatbot_manager,
+            "chat",
+            side_effect=ChatBotResponseError("Chatbot API returned invalid JSON."),
+        ):
+            with self.assertLogs("server.server", level="ERROR") as logs:
+                self.server._handle_group_bot_mention("Alice", "@bot help")
+
+        alice_message = self._read_message(alice_file)
+        bob_message = self._read_message(bob_file)
+        self.assertEqual(alice_message["content"], "Bot service returned an invalid response.")
+        self.assertEqual(bob_message["content"], "Bot service returned an invalid response.")
+        self.assertIn("Chatbot API returned invalid JSON.", "\n".join(logs.output))
+
+    def test_chatbot_unexpected_failure_returns_generic_system_message(self) -> None:
         _alice_client, alice_file, _alice_server = self._add_client("Alice")
         _bob_client, bob_file, _bob_server = self._add_client("Bob")
 
@@ -130,10 +209,15 @@ class ErrorHandlingTests(unittest.TestCase):
 
         alice_message = self._read_message(alice_file)
         bob_message = self._read_message(bob_file)
-        self.assertEqual(alice_message["type"], "system")
-        self.assertEqual(alice_message["content"], "Bot is temporarily unavailable.")
-        self.assertEqual(bob_message["content"], "Bot is temporarily unavailable.")
-        self.assertIn("Chatbot error while handling mention from Alice", "\n".join(logs.output))
+        self.assertEqual(alice_message["content"], "Bot failed unexpectedly. Check server logs.")
+        self.assertEqual(bob_message["content"], "Bot failed unexpectedly. Check server logs.")
+        self.assertIn("api down", "\n".join(logs.output))
+
+    def test_server_logs_bot_startup_warning_when_ai_is_unconfigured(self) -> None:
+        with self.assertLogs("server.server", level="WARNING") as logs:
+            self.server._log_bot_startup_status()
+
+        self.assertIn("Bot AI features are not configured", "\n".join(logs.output))
 
     def test_gui_error_mapping_is_friendly(self) -> None:
         self.assertEqual(
@@ -151,6 +235,26 @@ class ErrorHandlingTests(unittest.TestCase):
         self.assertEqual(
             GUIChatClient.friendly_server_error_message("Invalid move (cell occupied or out of bounds)"),
             "Invalid move. Choose an empty cell.",
+        )
+        self.assertEqual(
+            GUIChatClient.friendly_server_error_message("Bot is not configured on the server."),
+            "Bot is not configured on the server.",
+        )
+        self.assertEqual(
+            GUIChatClient.friendly_server_error_message("Bot service authentication failed."),
+            "Bot service authentication failed.",
+        )
+        self.assertEqual(
+            GUIChatClient.friendly_server_error_message("Bot service is unreachable right now."),
+            "Bot service is unreachable right now.",
+        )
+        self.assertEqual(
+            GUIChatClient.friendly_server_error_message("Bot service returned an invalid response."),
+            "Bot service returned an invalid response.",
+        )
+        self.assertEqual(
+            GUIChatClient.friendly_server_error_message("Bot failed unexpectedly. Check server logs."),
+            "Bot failed unexpectedly. Check server logs.",
         )
         self.assertEqual(
             GUIChatClient.friendly_server_error_message("Bot is temporarily unavailable."),
