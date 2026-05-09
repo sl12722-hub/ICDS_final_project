@@ -50,7 +50,7 @@ Notes:
 ### 1. Enter the project folder
 
 ```bash
-cd "/Users/sitongli/Desktop/ICDS final project"
+cd path/to/ICDS_final_project
 ```
 
 ### 2. Optional: configure AI environment variables
@@ -87,14 +87,14 @@ Server listening on 0.0.0.0:12345
 Open a second Terminal window:
 
 ```bash
-cd "/Users/sitongli/Desktop/ICDS final project"
+cd path/to/ICDS_final_project
 python3 -m client.gui_client
 ```
 
 Open a third Terminal window for another user:
 
 ```bash
-cd "/Users/sitongli/Desktop/ICDS final project"
+cd path/to/ICDS_final_project
 python3 -m client.gui_client
 ```
 
