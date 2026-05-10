@@ -22,6 +22,7 @@ The project uses one shared JSON message protocol for all communication between 
 - Chat summary with `/summary`
 - Keyword extraction with `/keywords`
 - Sentiment labels shown beside chat messages
+- Emoji toolbar and shortcode support such as `:smile:` and `:thumbsup:`
 - Optional AI picture generation with `/aipic: ...`
 - Friendly GUI error messages and readable server logs for demo use
 
@@ -153,6 +154,27 @@ Important note:
 - `/summary` returns a short summary based on recent public chat history.
 - `/keywords` returns the most frequent informative keywords from recent public chat history.
 - These responses are sent privately to the requesting client.
+
+### Emoji Support
+
+The GUI now includes a clickable emoji toolbar above the message input box.
+
+- Click an emoji button to insert it into your message.
+- You can also type shortcodes directly and they will be converted before sending.
+
+Supported shortcodes:
+
+```text
+:smile: :laugh: :heart: :thumbsup: :party: :fire: :think: :sad:
+```
+
+Examples:
+
+```text
+Great job :thumbsup:
+We won :party:
+@bot can you explain recursion :think:
+```
 
 ### AI Picture Generation
 
