@@ -139,8 +139,8 @@ class GUIChatClient:
         self.user_listbox = tk.Listbox(user_list_frame, width=18, height=18)
         self.user_listbox.pack(fill="y", expand=True)
 
-        emoji_frame = tk.Frame(self.root, padx=10, pady=(0, 6))
-        emoji_frame.pack(fill="x")
+        emoji_frame = tk.Frame(self.root, padx=10)
+        emoji_frame.pack(fill="x", pady=(0, 6))
         tk.Label(emoji_frame, text="Emoji").pack(side="left")
         for emoji in EMOJI_BUTTONS:
             tk.Button(
