@@ -407,15 +407,6 @@ Show the saved image path and preview window.
 - AI image quality depends on the external model and image service response.
 - Team member names and final contribution details still need to be filled in before submission.
 
-## Member Contributions
-
-Replace this placeholder section with your final team breakdown.
-
-- `[Member 1 Name]`: server architecture, protocol, integration
-- `[Member 2 Name]`: GUI client, usability, demo preparation
-- `[Member 3 Name]`: chatbot, AI integration
-- `[Member 4 Name]`: game logic, testing, documentation
-
 ## Quick Start Checklist
 
 For a grader or TA who wants the shortest path:
