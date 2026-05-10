@@ -104,7 +104,23 @@ class GameManager:
         with self.lock:
             room_id = self.player_in_game.pop(player_name, None)
             if room_id and room_id in self.rooms:
-                self.rooms.pop(room_id, None)
+                room = self.rooms.pop(room_id, None)
+                if room is not None:
+                    self.player_in_game.pop(room.x_player_name, None)
+                    if room.o_player_name:
+                        self.player_in_game.pop(room.o_player_name, None)
+
+    def finish_room(self, room_id: str) -> None:
+        """Remove a completed room so players can create or join a new game."""
+
+        with self.lock:
+            room = self.rooms.pop(room_id, None)
+            if room is None:
+                return
+
+            self.player_in_game.pop(room.x_player_name, None)
+            if room.o_player_name:
+                self.player_in_game.pop(room.o_player_name, None)
 
     def handle_move(self, room_id: str, player_name: str, row: int, col: int) -> tuple[bool, dict]:
         """Handle a player's move and return the game state."""

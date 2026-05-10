@@ -15,6 +15,7 @@ from bonus.summary_keywords import (
     extract_keywords,
     generate_summary,
 )
+from bonus.sentiment import analyze_sentiment
 from chatbot.chatbot_client import (
     ChatBotAuthenticationError,
     ChatBotConfigurationError,
@@ -143,7 +144,7 @@ class ChatServer:
         if msg_type == "error":
             return
 
-        if msg_type in {"game_state", "game_end"}:
+        if msg_type in {"game_state", "game_end", "sentiment_result"}:
             return
 
         sender_name = self._normalize_name(message["sender"], source_socket)
@@ -173,6 +174,11 @@ class ChatServer:
             self._handle_game_create(source_socket, sender_name)
             return
 
+        if msg_type == "bot_request":
+            self._announce_join_if_needed(source_socket)
+            self._handle_bot_request(source_socket, sender_name, content, extra)
+            return
+
         if msg_type == "game_join":
             room_id = str(extra.get("room_id", "")).strip()
             self._handle_game_join(source_socket, sender_name, room_id)
@@ -189,10 +195,9 @@ class ChatServer:
         target = message["target"]
         if target == "all":
             message["sender"] = sender_name
-            self.broadcast(message)
-            self._record_group_message(message)
+            self._broadcast_public_chat(message)
 
-            if self._should_trigger_group_bot(message):
+            if self._should_trigger_group_bot(message["content"], sender_name):
                 thread = threading.Thread(
                     target=self._handle_group_bot_mention,
                     args=(sender_name, message["content"]),
@@ -335,18 +340,84 @@ class ChatServer:
             extra={"user_list": self.get_online_users()},
         )
 
-    def _should_trigger_group_bot(self, message: dict[str, str]) -> bool:
+    def _broadcast_public_chat(self, message: dict[str, object]) -> None:
+        """Broadcast one public chat message with a server-generated sentiment label."""
+
+        sender = str(message.get("sender", "")).strip()
+        content = str(message.get("content", ""))
+        target = str(message.get("target", "all")).strip() or "all"
+        extra = dict(message.get("extra", {})) if isinstance(message.get("extra", {}), dict) else {}
+
+        display_message = create_message(
+            "sentiment_result",
+            sender,
+            content,
+            target=target,
+            extra={**extra, "sentiment": analyze_sentiment(content)},
+        )
+        if "timestamp" in message:
+            display_message["timestamp"] = str(message["timestamp"])
+
+        self.broadcast(display_message)
+        self._record_group_message(
+            {
+                "type": "chat",
+                "sender": sender,
+                "target": target,
+                "content": content,
+                "timestamp": display_message["timestamp"],
+                "extra": extra,
+            }
+        )
+
+    def _should_trigger_group_bot(self, content: str, sender_name: str) -> bool:
         """Return True when a public chat message mentions the bot."""
 
-        if message.get("type") != "chat":
-            return False
-
-        sender = str(message.get("sender", "")).strip().lower()
+        sender = sender_name.strip().lower()
         if not sender or sender == "bot":
             return False
 
-        content = str(message.get("content", ""))
         return bool(content.strip() and self.bot_mention_pattern.search(content))
+
+    def _handle_bot_request(
+        self,
+        source_socket: socket.socket,
+        sender_name: str,
+        content: str,
+        extra: dict[str, object],
+    ) -> None:
+        """Handle chatbot prompt requests and personality updates."""
+
+        action = str(extra.get("action", "")).strip().lower()
+        if action == "set_personality":
+            personality_key = str(extra.get("personality", "")).strip().lower()
+            try:
+                label = self.chatbot_manager.set_personality(sender_name, personality_key)
+            except ValueError:
+                self.send_error(
+                    "Use /personality friendly, /personality funny, or /personality serious.",
+                    source_socket,
+                )
+                return
+
+            confirmation = create_message(
+                "system",
+                "System",
+                f"Bot personality set to {label}.",
+                target=sender_name,
+            )
+            self._safe_send_bytes(source_socket, encode_message(confirmation))
+            return
+
+        chat_message = create_message("chat", sender_name, content, target="all")
+        self._broadcast_public_chat(chat_message)
+
+        thread = threading.Thread(
+            target=self._handle_group_bot_mention,
+            args=(sender_name, content),
+            daemon=True,
+        )
+        thread.start()
 
     def _record_group_message(self, message: dict[str, str]) -> None:
         """Store a public message so bot prompts can use recent context.
@@ -636,6 +707,29 @@ class ChatServer:
         # Broadcast to both players
         self._safe_send_bytes(room.x_socket, encode_message(game_state_message))
         self._safe_send_bytes(room.o_socket, encode_message(game_state_message))
+
+        if result["is_game_over"]:
+            if result["winner"]:
+                result_text = f"Game result - {result['winner']} wins"
+            else:
+                result_text = "Game result - Draw"
+
+            game_end_message = create_message(
+                "game_end",
+                "Server",
+                result_text,
+                extra={
+                    "room_id": room_id,
+                    "board": result["board"],
+                    "winner": result["winner"],
+                    "is_draw": result["is_draw"],
+                    "x_player": room.x_player_name,
+                    "o_player": room.o_player_name,
+                },
+            )
+            self._safe_send_bytes(room.x_socket, encode_message(game_end_message))
+            self._safe_send_bytes(room.o_socket, encode_message(game_end_message))
+            self.game_manager.finish_room(room_id)
 
     def _normalize_name(self, requested_name: str, client_socket: socket.socket) -> str:
         """Use a readable guest name when the sender field is empty."""

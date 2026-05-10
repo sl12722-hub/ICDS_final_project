@@ -34,6 +34,7 @@ REQUEST_TIMEOUT = 60
 class AIPictureError(Exception):
     """Raised when AI picture generation fails."""
 
+
 def _build_image_prompt_with_llm(prompt: str) -> str:
     """Use the configured LLM to turn a user request into a concise image prompt."""
 
@@ -75,7 +76,8 @@ def _build_image_prompt_with_llm(prompt: str) -> str:
     try:
         content = response.json()["choices"][0]["message"]["content"].strip()
     except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise AIPictureError("Prompt model returned an unexpected response.") from exc
+        raise AIPictureError(
+            "Prompt model returned an unexpected response.") from exc
 
     if not content:
         raise AIPictureError("Prompt model returned an empty prompt.")
@@ -87,7 +89,7 @@ def parse_aipic_prompt(message: str) -> str | None:
     stripped = message.strip()
     if not stripped.lower().startswith(AIPIC_PREFIX):
         return None
-    prompt = stripped[len(AIPIC_PREFIX) :].strip()
+    prompt = stripped[len(AIPIC_PREFIX):].strip()
     return prompt or None
 
 
@@ -126,7 +128,8 @@ def generate_image(prompt: str, output_root: Path | None = None) -> str:
     root = output_root if output_root is not None else Path.cwd()
     output_dir = root / OUTPUT_DIR_NAME
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = _ensure_unique_path(output_dir, _slugify_filename(cleaned_prompt))
+    output_path = _ensure_unique_path(
+        output_dir, _slugify_filename(cleaned_prompt))
 
     try:
         response = requests.get(
