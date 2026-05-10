@@ -6,6 +6,8 @@ import argparse
 import socket
 import threading
 
+from bonus.sentiment import analyze_sentiment
+from chatbot.chatbot_manager import ChatbotManager
 from server.protocol import ProtocolError, create_message, decode_message, encode_message
 
 
@@ -39,9 +41,24 @@ def format_message(message: dict[str, str]) -> str:
     sender = message["sender"]
     timestamp = message["timestamp"]
     content = message["content"]
+    extra = message.get("extra", {})
 
     if msg_type == "chat":
         return f"[{timestamp}] {sender}: {content}"
+
+    if msg_type == "sentiment_result":
+        sentiment = ""
+        if isinstance(extra, dict):
+            sentiment = str(extra.get("sentiment", "")).strip()
+        if not sentiment:
+            sentiment = analyze_sentiment(content)
+        return f"[{timestamp}] {sender}: {content} [{sentiment}]"
+
+    if msg_type == "bot_response":
+        return f"[{timestamp}] Bot: {content}"
+
+    if msg_type in {"system", "error", "game_end", "summary_response", "keywords_response"}:
+        return f"[{timestamp}] {content}"
 
     return f"[{timestamp}] {msg_type.upper()} from {sender}: {content}"
 
@@ -51,6 +68,7 @@ def start_client(host: str, port: int, username: str) -> None:
 
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect((host, port))
+    chatbot_manager = ChatbotManager()
 
     receiver = threading.Thread(target=receive_messages, args=(client_socket,), daemon=True)
     receiver.start()
@@ -64,7 +82,22 @@ def start_client(host: str, port: int, username: str) -> None:
             if user_input.strip().lower() == "/quit":
                 break
 
-            message = create_message("chat", username, user_input)
+            stripped_input = user_input.strip()
+            if chatbot_manager.is_personality_command(stripped_input):
+                personality_key = chatbot_manager.extract_personality_choice(stripped_input)
+                if not personality_key:
+                    print("Use /personality friendly, /personality funny, or /personality serious.")
+                    continue
+                message = create_message(
+                    "bot_request",
+                    username,
+                    stripped_input,
+                    extra={"action": "set_personality", "personality": personality_key},
+                )
+            elif chatbot_manager.is_bot_command(stripped_input):
+                message = create_message("bot_request", username, stripped_input)
+            else:
+                message = create_message("chat", username, user_input)
             client_socket.sendall(encode_message(message))
     except KeyboardInterrupt:
         pass

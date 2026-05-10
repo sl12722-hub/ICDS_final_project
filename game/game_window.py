@@ -151,6 +151,8 @@ class GameWindow:
             self._handle_game_state(message)
         elif msg_type == "game_start":
             self._handle_game_start(message)
+        elif msg_type == "game_end":
+            self._handle_game_end(message)
         elif msg_type == "error":
             self._handle_error(message)
 
@@ -202,6 +204,26 @@ class GameWindow:
         content = message.get("content", "Unknown error")
         self.root.after(0, lambda: self.result_var.set(f"Error: {content}"))
 
+    def _handle_game_end(self, message: dict) -> None:
+        """Handle the final game result message from the server."""
+
+        extra = message.get("extra", {})
+        winner = None
+        is_draw = False
+        if isinstance(extra, dict):
+            winner = extra.get("winner")
+            is_draw = bool(extra.get("is_draw", False))
+
+        if winner:
+            result_text = f"Result: {winner} wins"
+        elif is_draw:
+            result_text = "Result: Draw"
+        else:
+            result_text = str(message.get("content", "Game finished"))
+
+        self.last_game_over_text = result_text
+        self.root.after(0, lambda: self._apply_game_end(result_text))
+
     def _update_board_from_state(self, board: list, current_player: str, winner: str | None, is_draw: bool, is_game_over: bool) -> None:
         """Update the UI with the new board state from the server."""
 
@@ -221,6 +243,13 @@ class GameWindow:
             elif is_draw:
                 self.result_var.set("Result: Draw")
             self._disable_board()
+
+    def _apply_game_end(self, result_text: str) -> None:
+        """Apply the final game status to the local UI."""
+
+        self.status_var.set(result_text)
+        self.result_var.set(result_text)
+        self._disable_board()
 
     def reset_game(self) -> None:
         """Restart the game and clear the board."""

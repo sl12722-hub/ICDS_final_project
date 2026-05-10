@@ -206,6 +206,8 @@ class GUIChatClient:
         self.sync_personality_selection(username)
         try:
             self.send_login_message(username)
+            current_personality_key = self.chatbot_manager.get_personality_key(username)
+            self.send_personality_update_request(current_personality_key)
         except OSError:
             self.status_var.set("Status: Disconnected")
             self.show_local_system_message("Could not complete login with the server.")
@@ -255,7 +257,7 @@ class GUIChatClient:
         if self.chatbot_manager.is_personality_command(content):
             self.message_var.set("")
             self.message_entry.focus_set()
-            self.handle_personality_command(content)
+            self.request_personality_change(content)
             return
 
         if content == SUMMARY_COMMAND:
@@ -284,7 +286,10 @@ class GUIChatClient:
 
         try:
             rendered_content = self.expand_emoji_shortcodes(content)
-            message = create_message("chat", self.username_var.get().strip(), rendered_content)
+            if self.chatbot_manager.is_bot_command(rendered_content):
+                message = create_message("bot_request", self.username_var.get().strip(), rendered_content)
+            else:
+                message = create_message("chat", self.username_var.get().strip(), rendered_content)
             self.client_socket.sendall(encode_message(message))
             self.message_var.set("")
             self.message_entry.focus_set()
@@ -315,6 +320,24 @@ class GUIChatClient:
             )
             self.handle_disconnect()
 
+    def send_personality_update_request(self, personality_key: str) -> None:
+        """Send the selected bot personality to the server."""
+
+        if self.client_socket is None:
+            return
+
+        username = self.username_var.get().strip()
+        if not username:
+            return
+
+        message = create_message(
+            "bot_request",
+            username,
+            f"/personality {personality_key}",
+            extra={"action": "set_personality", "personality": personality_key},
+        )
+        self.client_socket.sendall(encode_message(message))
+
     def format_message(self, message: dict[str, object]) -> str:
         """Format protocol messages for the chat window."""
 
@@ -323,6 +346,16 @@ class GUIChatClient:
             if not content.strip():
                 return f"{message['sender']}: {content}\n"
             sentiment_label = analyze_sentiment(content)
+            return f"{message['sender']}: {content} [{sentiment_label}]\n"
+
+        if message["type"] == "sentiment_result":
+            content = self.expand_emoji_shortcodes(str(message.get("content", "")))
+            extra = message.get("extra", {})
+            sentiment_label = ""
+            if isinstance(extra, dict):
+                sentiment_label = str(extra.get("sentiment", "")).strip()
+            if not sentiment_label:
+                sentiment_label = analyze_sentiment(content)
             return f"{message['sender']}: {content} [{sentiment_label}]\n"
 
         if message["type"] == "bot_response":
@@ -340,6 +373,12 @@ class GUIChatClient:
 
         if message["type"] == "keywords_response":
             return f"Keywords: {message['content']}\n"
+
+        if message["type"] == "game_state":
+            return ""
+
+        if message["type"] == "game_end":
+            return f"System: {message['content']}\n"
 
         return f"{message['sender']}: {message['content']}\n"
 
@@ -566,7 +605,9 @@ class GUIChatClient:
 
         self.handle_game_message(message)
 
-        self.add_text(self.format_message(message))
+        rendered = self.format_message(message)
+        if rendered:
+            self.add_text(rendered)
 
     def handle_game_message(self, message: dict[str, object]) -> None:
         """Handle game protocol messages and drive game UI state."""
@@ -607,16 +648,18 @@ class GUIChatClient:
             if self.active_game_window is not None:
                 self.active_game_window.handle_server_message(message)
 
+        elif msg_type == "game_end":
+            if self.active_game_window is not None:
+                self.active_game_window.handle_server_message(message)
+
             winner = extra.get("winner")
             is_draw = bool(extra.get("is_draw", False))
-            is_game_over = bool(extra.get("is_game_over", False))
-            if is_game_over:
-                if winner:
-                    self.game_status_var.set(f"Game: Winner {winner}")
-                    self.add_text(f"System: Game result - {winner} wins\n")
-                elif is_draw:
-                    self.game_status_var.set("Game: Draw")
-                    self.add_text("System: Game result - Draw\n")
+            if winner:
+                self.game_status_var.set(f"Game: Winner {winner}")
+            elif is_draw:
+                self.game_status_var.set("Game: Draw")
+            else:
+                self.game_status_var.set("Game: Finished")
 
         elif msg_type == "error":
             text = self.friendly_server_error_message(str(message.get("content", "")))
@@ -673,12 +716,37 @@ class GUIChatClient:
         self.personality_var.set(self.chatbot_manager.get_personality_label(user_key))
         self.show_local_system_message(result_text)
 
+    def request_personality_change(self, command_text: str) -> None:
+        """Update local state and sync the selected bot personality to the server."""
+
+        user_key = self.get_chatbot_user_key()
+        personality_key = self.chatbot_manager.extract_personality_choice(command_text)
+        if not personality_key:
+            self.show_local_system_message(
+                "Use /personality friendly, /personality funny, or /personality serious."
+            )
+            return
+
+        self.chatbot_manager.set_personality(user_key, personality_key)
+        self.personality_var.set(self.chatbot_manager.get_personality_label(user_key))
+
+        if self.client_socket is None:
+            self.show_local_system_message(f"Bot personality set to {self.personality_var.get()}.")
+            return
+
+        try:
+            self.send_personality_update_request(personality_key)
+        except OSError:
+            self.status_var.set("Status: Disconnected")
+            self.show_local_system_message("Could not update bot personality because the server is unavailable.")
+            self.handle_disconnect()
+
     def on_personality_selected(self, selected_label: str) -> None:
         """Update the chatbot manager when the dropdown changes."""
 
         self.personality_var.set(selected_label)
-        self.sync_personality_selection()
-        self.show_local_system_message(f"Bot personality set to {selected_label}.")
+        personality_key = self.chatbot_manager.personality_key_from_label(selected_label)
+        self.request_personality_change(f"/personality {personality_key}")
 
     def close_window(self) -> None:
         """Close the socket first so the app exits cleanly."""

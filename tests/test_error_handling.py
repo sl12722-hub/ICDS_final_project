@@ -6,6 +6,7 @@ import socket
 import unittest
 from unittest.mock import patch
 
+from bonus.sentiment import analyze_sentiment
 from chatbot.chatbot_client import (
     ChatBotAuthenticationError,
     ChatBotConfigurationError,
@@ -125,6 +126,130 @@ class ErrorHandlingTests(unittest.TestCase):
         self.assertEqual(error_message["type"], "error")
         self.assertEqual(error_message["content"], "Invalid move. It is not your turn.")
         self.assertIn("Invalid game move", "\n".join(move_logs.output))
+
+    def test_public_chat_is_broadcast_as_sentiment_result(self) -> None:
+        _alice_client, alice_file, alice_server = self._add_client("Alice")
+        _bob_client, bob_file, _bob_server = self._add_client("Bob")
+
+        self.server.route_message(
+            alice_server,
+            create_message("chat", "Alice", "I am very happy today!"),
+        )
+
+        alice_message = self._read_message(alice_file)
+        bob_message = self._read_message(bob_file)
+
+        self.assertEqual(alice_message["type"], "sentiment_result")
+        self.assertEqual(bob_message["type"], "sentiment_result")
+        self.assertEqual(alice_message["content"], "I am very happy today!")
+        self.assertEqual(alice_message["extra"]["sentiment"], analyze_sentiment("I am very happy today!"))
+
+    def test_bot_request_updates_server_personality(self) -> None:
+        _alice_client, alice_file, alice_server = self._add_client("Alice")
+
+        self.server.route_message(
+            alice_server,
+            create_message(
+                "bot_request",
+                "Alice",
+                "/personality serious",
+                extra={"action": "set_personality", "personality": "serious"},
+            ),
+        )
+
+        message = self._read_message(alice_file)
+        self.assertEqual(message["type"], "system")
+        self.assertEqual(message["content"], "Bot personality set to Serious Assistant.")
+        self.assertEqual(self.server.chatbot_manager.get_personality_key("Alice"), "serious")
+
+    def test_bot_request_broadcasts_prompt_and_bot_reply(self) -> None:
+        _alice_client, alice_file, alice_server = self._add_client("Alice")
+        _bob_client, bob_file, _bob_server = self._add_client("Bob")
+
+        with patch.object(self.server.chatbot_manager, "chat", return_value="Hello from Bot"):
+            self.server.route_message(
+                alice_server,
+                create_message("bot_request", "Alice", "@bot help me"),
+            )
+
+        alice_prompt = self._read_message(alice_file)
+        bob_prompt = self._read_message(bob_file)
+        alice_reply = self._read_message(alice_file)
+        bob_reply = self._read_message(bob_file)
+
+        self.assertEqual(alice_prompt["type"], "sentiment_result")
+        self.assertEqual(bob_prompt["type"], "sentiment_result")
+        self.assertEqual(alice_prompt["content"], "@bot help me")
+        self.assertEqual(alice_reply["type"], "bot_response")
+        self.assertEqual(bob_reply["type"], "bot_response")
+        self.assertEqual(alice_reply["content"], "Hello from Bot")
+
+    def test_game_end_message_is_sent_and_room_is_released(self) -> None:
+        _alice_client, alice_file, alice_server = self._add_client("Alice")
+        _bob_client, bob_file, bob_server = self._add_client("Bob")
+
+        self.server.route_message(alice_server, create_message("game_create", "Alice", "create room"))
+        create_response = self._read_message(alice_file)
+        room_id = str(create_response["extra"]["room_id"])
+
+        self.server.route_message(
+            bob_server,
+            create_message(
+                "game_join",
+                "Bob",
+                f"join {room_id}",
+                extra={"room_id": room_id},
+            ),
+        )
+        self._read_message(alice_file)
+        self._read_message(bob_file)
+
+        moves = (
+            (alice_server, alice_file, bob_file, 0, 0),
+            (bob_server, bob_file, alice_file, 1, 0),
+            (alice_server, alice_file, bob_file, 0, 1),
+            (bob_server, bob_file, alice_file, 1, 1),
+            (alice_server, alice_file, bob_file, 0, 2),
+        )
+        for player_server, own_file, other_file, row, col in moves[:-1]:
+            self.server.route_message(
+                player_server,
+                create_message(
+                    "game_move",
+                    "Alice" if player_server is alice_server else "Bob",
+                    "move",
+                    extra={"room_id": room_id, "row": row, "col": col},
+                ),
+            )
+            self._read_message(own_file)
+            self._read_message(other_file)
+
+        final_server, final_file, other_file, row, col = moves[-1]
+        self.server.route_message(
+            final_server,
+            create_message(
+                "game_move",
+                "Alice",
+                "move",
+                extra={"room_id": room_id, "row": row, "col": col},
+            ),
+        )
+
+        final_state_a = self._read_message(final_file)
+        final_state_b = self._read_message(other_file)
+        final_end_a = self._read_message(final_file)
+        final_end_b = self._read_message(other_file)
+
+        self.assertEqual(final_state_a["type"], "game_state")
+        self.assertEqual(final_state_b["type"], "game_state")
+        self.assertEqual(final_end_a["type"], "game_end")
+        self.assertEqual(final_end_b["type"], "game_end")
+        self.assertEqual(final_end_a["extra"]["winner"], "X")
+        self.assertIsNone(self.server.game_manager.get_room(room_id))
+
+        self.server.route_message(alice_server, create_message("game_create", "Alice", "create room"))
+        next_room_message = self._read_message(alice_file)
+        self.assertEqual(next_room_message["type"], "game_create")
 
     def test_chatbot_missing_config_returns_friendly_system_message(self) -> None:
         _alice_client, alice_file, _alice_server = self._add_client("Alice")
