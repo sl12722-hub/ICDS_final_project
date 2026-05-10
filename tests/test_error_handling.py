@@ -261,6 +261,22 @@ class ErrorHandlingTests(unittest.TestCase):
             "Bot is temporarily unavailable.",
         )
 
+    def test_emoji_shortcodes_expand_for_supported_tokens(self) -> None:
+        self.assertEqual(
+            GUIChatClient.expand_emoji_shortcodes("Nice work :thumbsup: :party:"),
+            "Nice work 👍 🎉",
+        )
+        self.assertEqual(
+            GUIChatClient.expand_emoji_shortcodes("@bot hello :think:"),
+            "@bot hello 🤔",
+        )
+
+    def test_emoji_shortcodes_leave_unknown_text_unchanged(self) -> None:
+        self.assertEqual(
+            GUIChatClient.expand_emoji_shortcodes("plain text :unknown:"),
+            "plain text :unknown:",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,17 @@ from server.protocol import ProtocolError, create_message, decode_message, encod
 
 SUMMARY_COMMAND = "/summary"
 KEYWORDS_COMMAND = "/keywords"
+EMOJI_SHORTCODES = {
+    ":smile:": "😀",
+    ":laugh:": "😂",
+    ":heart:": "❤️",
+    ":thumbsup:": "👍",
+    ":party:": "🎉",
+    ":fire:": "🔥",
+    ":think:": "🤔",
+    ":sad:": "😢",
+}
+EMOJI_BUTTONS = ("😀", "😂", "❤️", "👍", "🎉", "🔥", "🤔", "😢")
 
 
 class GUIChatClient:
@@ -26,7 +37,7 @@ class GUIChatClient:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("ICDS Chat Client")
-        self.root.geometry("700x500")
+        self.root.geometry("760x560")
 
         self.client_socket: socket.socket | None = None
         self.receiver_thread: threading.Thread | None = None
@@ -127,6 +138,21 @@ class GUIChatClient:
         tk.Label(user_list_frame, text="Online Users").pack(anchor="w")
         self.user_listbox = tk.Listbox(user_list_frame, width=18, height=18)
         self.user_listbox.pack(fill="y", expand=True)
+
+        emoji_frame = tk.Frame(self.root, padx=10, pady=(0, 6))
+        emoji_frame.pack(fill="x")
+        tk.Label(emoji_frame, text="Emoji").pack(side="left")
+        for emoji in EMOJI_BUTTONS:
+            tk.Button(
+                emoji_frame,
+                text=emoji,
+                width=3,
+                command=lambda value=emoji: self.insert_emoji(value),
+            ).pack(side="left", padx=(6, 0))
+        tk.Label(
+            emoji_frame,
+            text="Shortcuts: :smile: :heart: :thumbsup: :party: :fire: :think: :sad:",
+        ).pack(side="left", padx=(12, 0))
 
         bottom_frame = tk.Frame(self.root, padx=10, pady=10)
         bottom_frame.pack(fill="x")
@@ -257,7 +283,8 @@ class GUIChatClient:
             return
 
         try:
-            message = create_message("chat", self.username_var.get().strip(), content)
+            rendered_content = self.expand_emoji_shortcodes(content)
+            message = create_message("chat", self.username_var.get().strip(), rendered_content)
             self.client_socket.sendall(encode_message(message))
             self.message_var.set("")
             self.message_entry.focus_set()
@@ -292,14 +319,15 @@ class GUIChatClient:
         """Format protocol messages for the chat window."""
 
         if message["type"] == "chat":
-            content = str(message.get("content", ""))
+            content = self.expand_emoji_shortcodes(str(message.get("content", "")))
             if not content.strip():
                 return f"{message['sender']}: {content}\n"
             sentiment_label = analyze_sentiment(content)
             return f"{message['sender']}: {content} [{sentiment_label}]\n"
 
         if message["type"] == "bot_response":
-            return f"Bot: {message['content']}\n"
+            content = self.expand_emoji_shortcodes(str(message.get("content", "")))
+            return f"Bot: {content}\n"
 
         if message["type"] == "system":
             return f"System: {self.friendly_server_error_message(str(message['content']))}\n"
@@ -460,6 +488,19 @@ class GUIChatClient:
         system_message = create_message("system", "System", text)
         self.add_text(self.format_message(system_message))
 
+    def insert_emoji(self, emoji: str) -> None:
+        """Insert one emoji into the current message box at the cursor."""
+
+        if str(self.message_entry.cget("state")) == "disabled":
+            return
+
+        cursor_index = self.message_entry.index("insert")
+        current_text = self.message_var.get()
+        updated_text = current_text[:cursor_index] + emoji + current_text[cursor_index:]
+        self.message_var.set(updated_text)
+        self.message_entry.icursor(cursor_index + len(emoji))
+        self.message_entry.focus_set()
+
     @staticmethod
     def friendly_server_error_message(text: str) -> str:
         """Map raw server-side error strings to user-friendly GUI text."""
@@ -490,6 +531,15 @@ class GUIChatClient:
         if "target user" in lowered and "not connected" in lowered:
             return "That user is not connected."
         return text.strip()
+
+    @staticmethod
+    def expand_emoji_shortcodes(text: str) -> str:
+        """Convert supported emoji shortcodes into display-ready emoji."""
+
+        expanded = text
+        for shortcode, emoji in EMOJI_SHORTCODES.items():
+            expanded = expanded.replace(shortcode, emoji)
+        return expanded
 
     def send_login_message(self, username: str) -> None:
         """Tell the server which display name this client will use."""
